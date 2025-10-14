@@ -6,22 +6,11 @@ from io import BytesIO
 import shutil
 
 st.set_page_config(page_title="工作日报统计工具", layout="centered")
-st.title("📊 工作日报周统计工具（固定格式版）")
+st.title("📊 工作日报周统计工具")
 
 st.markdown("""
 该工具用于统计**开发与测试人员**一周的工作量。  
 请上传一个包含多个人员日报的 **ZIP 压缩包**（每个日报为 `.xlsx` 文件）。  
-
-📘 每个 Excel 文件格式要求（固定格式）：
-- **B2 单元格**：人员姓名
-- **B3 单元格**：日期（如：2025-10-11）
-- **第5行开始**：工作内容表格，列分别为：
-  - **A列**：项目名称
-  - **B列**：模块名称
-  - **C列**：工作内容
-  - **D列**：完成状态
-- 每个 sheet 表示一天的日报
-- 文件名可以是任意名称
 """)
 
 # === Step 1: 上传压缩包 ===
@@ -230,7 +219,7 @@ if uploaded_file is not None:
             dev_summary = (
                 dev_data.groupby(["人员", "模块名称"])
                 .size()
-                .reset_index(name="开发次数")
+                .reset_index(name="维护次数")
             )
             dev_module_count = (
                 dev_summary.groupby("人员")["模块名称"].nunique().reset_index(name="模块数量")
@@ -238,9 +227,9 @@ if uploaded_file is not None:
             dev_output = pd.merge(dev_module_count, dev_summary, on="人员", how="left")
             
             # 按人员和开发次数排序
-            dev_output = dev_output.sort_values(by=["人员", "开发次数"], ascending=[True, False])
+            dev_output = dev_output.sort_values(by=["人员", "维护次数"], ascending=[True, False])
         else:
-            dev_output = pd.DataFrame(columns=["人员", "模块数量", "模块名称", "开发次数"])
+            dev_output = pd.DataFrame(columns=["人员", "模块数量", "模块名称", "维护次数"])
             st.info("ℹ️ 未找到开发人员数据")
 
         # === Step 6: 测试统计 ===
@@ -293,7 +282,7 @@ if uploaded_file is not None:
 
         # === Step 7: 输出文件（独立生成，不影响界面） ===
         st.success("🎉 日报处理完成！请下载统计结果👇")
-        st.info("💡 提示：可以多次下载，数据不会丢失")
+        st.info("💡 提示：可以多次下载")
         
         # 生成下载按钮
         col1, col2, col3 = st.columns([1, 1, 1])
@@ -311,7 +300,7 @@ if uploaded_file is not None:
                 worksheet.column_dimensions['A'].width = 15  # 人员
                 worksheet.column_dimensions['B'].width = 12  # 模块数量
                 worksheet.column_dimensions['C'].width = 25  # 模块名称
-                worksheet.column_dimensions['D'].width = 12  # 开发次数
+                worksheet.column_dimensions['D'].width = 12  # 维护次数
                 
                 # 设置表头样式
                 header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
