@@ -36,8 +36,15 @@ if uploaded_file is not None:
 
     # === Step 2: 点击开始处理 ===
     if st.button("🚀 开始处理日报"):
-        all_records = []
-        debug_info = []
+        # 使用 session_state 保存处理结果，避免下载后数据丢失
+        st.session_state.processing = True
+        st.session_state.all_records = []
+        st.session_state.debug_info = []
+    
+    # 如果已经处理过，显示结果
+    if hasattr(st.session_state, 'processing') and st.session_state.processing:
+        all_records = st.session_state.all_records
+        debug_info = st.session_state.debug_info
 
         def read_daily_report(file_path: str):
             """读取单个日报文件（xlsx），返回 DataFrame"""
@@ -169,6 +176,10 @@ if uploaded_file is not None:
             if not df.empty:
                 all_records.append(df)
             progress_bar.progress((idx + 1) / len(xlsx_files))
+        
+        # 保存到 session_state
+        st.session_state.all_records = all_records
+        st.session_state.debug_info = debug_info
 
         # 显示调试信息
         if debug_info:
@@ -182,10 +193,14 @@ if uploaded_file is not None:
             st.error("   - B2单元格：人员姓名")
             st.error("   - B3单元格：日期")
             st.error("   - 第5行开始：A列=项目名称、B列=模块名称、C列=工作内容、D列=完成状态")
+            st.session_state.processing = False
             st.stop()
 
         all_data = pd.concat(all_records, ignore_index=True)
         st.success(f"✅ 成功读取 {len(all_data)} 条工作记录，涉及 {all_data['人员'].nunique()} 名人员")
+        
+        # 保存到 session_state
+        st.session_state.all_data = all_data
 
         # 显示原始数据预览
         with st.expander("📋 查看原始数据", expanded=False):
@@ -204,7 +219,7 @@ if uploaded_file is not None:
             dev_summary = (
                 dev_data.groupby(["人员", "模块名称"])
                 .size()
-                .reset_index(name="开发次数")
+                .reset_index(name="维护次数")
             )
             dev_module_count = (
                 dev_summary.groupby("人员")["模块名称"].nunique().reset_index(name="模块数量")
@@ -212,9 +227,9 @@ if uploaded_file is not None:
             dev_output = pd.merge(dev_module_count, dev_summary, on="人员", how="left")
             
             # 按人员和开发次数排序
-            dev_output = dev_output.sort_values(by=["人员", "开发次数"], ascending=[True, False])
+            dev_output = dev_output.sort_values(by=["人员", "维护次数"], ascending=[True, False])
         else:
-            dev_output = pd.DataFrame(columns=["人员", "模块数量", "模块名称", "开发次数"])
+            dev_output = pd.DataFrame(columns=["人员", "模块数量", "模块名称", "维护次数"])
             st.info("ℹ️ 未找到开发人员数据")
 
         # === Step 6: 测试统计 ===
@@ -236,6 +251,17 @@ if uploaded_file is not None:
         else:
             test_output = pd.DataFrame(columns=["人员", "模块数量", "模块名称", "测试次数"])
             st.info("ℹ️ 未找到测试人员数据")
+        
+        # 保存统计结果到 session_state
+        st.session_state.dev_output = dev_output
+        st.session_state.test_output = test_output
+        st.session_state.results_ready = True
+    
+    # === 显示结果和下载按钮（独立于处理逻辑） ===
+    if hasattr(st.session_state, 'results_ready') and st.session_state.results_ready:
+        all_data = st.session_state.all_data
+        dev_output = st.session_state.dev_output
+        test_output = st.session_state.test_output
 
         # 显示预览
         st.subheader("📊 统计结果预览")
@@ -254,39 +280,55 @@ if uploaded_file is not None:
             else:
                 st.info("无数据")
 
-        # === Step 7: 输出文件 ===
-        dev_buffer = BytesIO()
-        test_buffer = BytesIO()
-        
-        with pd.ExcelWriter(dev_buffer, engine='openpyxl') as writer:
-            dev_output.to_excel(writer, index=False, sheet_name='开发统计')
-        
-        with pd.ExcelWriter(test_buffer, engine='openpyxl') as writer:
-            test_output.to_excel(writer, index=False, sheet_name='测试统计')
-        
-        dev_buffer.seek(0)
-        test_buffer.seek(0)
-
+        # === Step 7: 输出文件（独立生成，不影响界面） ===
         st.success("🎉 日报处理完成！请下载统计结果👇")
-
-        col1, col2 = st.columns(2)
+        st.info("💡 提示：可以多次下载，数据不会丢失")
+        
+        # 生成下载按钮
+        col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
+            # 实时生成Excel文件
+            dev_buffer = BytesIO()
+            with pd.ExcelWriter(dev_buffer, engine='openpyxl') as writer:
+                dev_output.to_excel(writer, index=False, sheet_name='开发统计')
+            dev_buffer.seek(0)
+            
             st.download_button(
                 label="⬇️ 下载开发人员统计",
-                data=dev_buffer,
+                data=dev_buffer.getvalue(),
                 file_name="开发人员工作量统计.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        with col2:
-            st.download_button(
-                label="⬇️ 下载测试人员统计",
-                data=test_buffer,
-                file_name="测试人员工作量统计.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_dev"
             )
         
-        # 清理临时文件
-        try:
-            shutil.rmtree(temp_dir)
-        except:
-            pass
+        with col2:
+            # 实时生成Excel文件
+            test_buffer = BytesIO()
+            with pd.ExcelWriter(test_buffer, engine='openpyxl') as writer:
+                test_output.to_excel(writer, index=False, sheet_name='测试统计')
+            test_buffer.seek(0)
+            
+            st.download_button(
+                label="⬇️ 下载测试人员统计",
+                data=test_buffer.getvalue(),
+                file_name="测试人员工作量统计.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_test"
+            )
+        
+        with col3:
+            # 重新处理按钮
+            if st.button("🔄 重新处理", key="reprocess"):
+                st.session_state.processing = False
+                st.session_state.results_ready = False
+                st.rerun()
+        
+        # 清理临时文件（可选）
+        with st.expander("🗑️ 清理临时文件"):
+            if st.button("清理临时文件", key="clean_temp"):
+                try:
+                    if os.path.exists(temp_dir):
+                        shutil.rmtree(temp_dir)
+                    st.success("✅ 临时文件已清理")
+                except Exception as e:
+                    st.error(f"清理失败：{e}")
