@@ -6,11 +6,22 @@ from io import BytesIO
 import shutil
 
 st.set_page_config(page_title="工作日报统计工具", layout="centered")
-st.title("📊 工作日报周统计工具")
+st.title("📊 工作日报周统计工具（固定格式版）")
 
 st.markdown("""
 该工具用于统计**开发与测试人员**一周的工作量。  
 请上传一个包含多个人员日报的 **ZIP 压缩包**（每个日报为 `.xlsx` 文件）。  
+
+📘 每个 Excel 文件格式要求（固定格式）：
+- **B2 单元格**：人员姓名
+- **B3 单元格**：日期（如：2025-10-11）
+- **第5行开始**：工作内容表格，列分别为：
+  - **A列**：项目名称
+  - **B列**：模块名称
+  - **C列**：工作内容
+  - **D列**：完成状态
+- 每个 sheet 表示一天的日报
+- 文件名可以是任意名称
 """)
 
 # === Step 1: 上传压缩包 ===
@@ -219,7 +230,7 @@ if uploaded_file is not None:
             dev_summary = (
                 dev_data.groupby(["人员", "模块名称"])
                 .size()
-                .reset_index(name="维护次数")
+                .reset_index(name="开发次数")
             )
             dev_module_count = (
                 dev_summary.groupby("人员")["模块名称"].nunique().reset_index(name="模块数量")
@@ -227,9 +238,9 @@ if uploaded_file is not None:
             dev_output = pd.merge(dev_module_count, dev_summary, on="人员", how="left")
             
             # 按人员和开发次数排序
-            dev_output = dev_output.sort_values(by=["人员", "维护次数"], ascending=[True, False])
+            dev_output = dev_output.sort_values(by=["人员", "开发次数"], ascending=[True, False])
         else:
-            dev_output = pd.DataFrame(columns=["人员", "模块数量", "模块名称", "维护次数"])
+            dev_output = pd.DataFrame(columns=["人员", "模块数量", "模块名称", "开发次数"])
             st.info("ℹ️ 未找到开发人员数据")
 
         # === Step 6: 测试统计 ===
@@ -287,10 +298,69 @@ if uploaded_file is not None:
         # 生成下载按钮
         col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
-            # 实时生成Excel文件
+            # 实时生成Excel文件（带格式）
             dev_buffer = BytesIO()
+            from openpyxl.styles import Alignment, Font, Border, Side, PatternFill
+            
             with pd.ExcelWriter(dev_buffer, engine='openpyxl') as writer:
                 dev_output.to_excel(writer, index=False, sheet_name='开发统计')
+                workbook = writer.book
+                worksheet = writer.sheets['开发统计']
+                
+                # 设置列宽
+                worksheet.column_dimensions['A'].width = 15  # 人员
+                worksheet.column_dimensions['B'].width = 12  # 模块数量
+                worksheet.column_dimensions['C'].width = 25  # 模块名称
+                worksheet.column_dimensions['D'].width = 12  # 开发次数
+                
+                # 设置表头样式
+                header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+                header_font = Font(bold=True, color='FFFFFF', size=11)
+                header_alignment = Alignment(horizontal='center', vertical='center')
+                
+                for col in range(1, 5):
+                    cell = worksheet.cell(row=1, column=col)
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = header_alignment
+                
+                # 合并单元格并设置样式
+                if not dev_output.empty:
+                    current_person = None
+                    start_row = 2
+                    
+                    for idx, row in dev_output.iterrows():
+                        current_row = idx + 2  # Excel行号（从2开始，1是表头）
+                        
+                        # 检查是否需要合并上一个人员的单元格
+                        if current_person is not None and row['人员'] != current_person:
+                            if start_row < current_row:
+                                # 合并人员列
+                                worksheet.merge_cells(f'A{start_row}:A{current_row - 1}')
+                                # 合并模块数量列
+                                worksheet.merge_cells(f'B{start_row}:B{current_row - 1}')
+                            start_row = current_row
+                        
+                        current_person = row['人员']
+                        
+                        # 设置单元格对齐方式
+                        for col in range(1, 5):
+                            cell = worksheet.cell(row=current_row, column=col)
+                            if col in [1, 2, 4]:  # 人员、模块数量、开发次数居中
+                                cell.alignment = Alignment(horizontal='center', vertical='center')
+                            else:  # 模块名称左对齐
+                                cell.alignment = Alignment(horizontal='left', vertical='center')
+                    
+                    # 处理最后一个人员
+                    if start_row < len(dev_output) + 2:
+                        worksheet.merge_cells(f'A{start_row}:A{len(dev_output) + 1}')
+                        worksheet.merge_cells(f'B{start_row}:B{len(dev_output) + 1}')
+                    
+                    # 设置合并后单元格的对齐方式
+                    for row in range(2, len(dev_output) + 2):
+                        worksheet.cell(row=row, column=1).alignment = Alignment(horizontal='center', vertical='center')
+                        worksheet.cell(row=row, column=2).alignment = Alignment(horizontal='center', vertical='center')
+            
             dev_buffer.seek(0)
             
             st.download_button(
@@ -302,10 +372,68 @@ if uploaded_file is not None:
             )
         
         with col2:
-            # 实时生成Excel文件
+            # 实时生成Excel文件（带格式）
             test_buffer = BytesIO()
+            
             with pd.ExcelWriter(test_buffer, engine='openpyxl') as writer:
                 test_output.to_excel(writer, index=False, sheet_name='测试统计')
+                workbook = writer.book
+                worksheet = writer.sheets['测试统计']
+                
+                # 设置列宽
+                worksheet.column_dimensions['A'].width = 15  # 人员
+                worksheet.column_dimensions['B'].width = 12  # 模块数量
+                worksheet.column_dimensions['C'].width = 25  # 模块名称
+                worksheet.column_dimensions['D'].width = 12  # 测试次数
+                
+                # 设置表头样式
+                header_fill = PatternFill(start_color='70AD47', end_color='70AD47', fill_type='solid')
+                header_font = Font(bold=True, color='FFFFFF', size=11)
+                header_alignment = Alignment(horizontal='center', vertical='center')
+                
+                for col in range(1, 5):
+                    cell = worksheet.cell(row=1, column=col)
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = header_alignment
+                
+                # 合并单元格并设置样式
+                if not test_output.empty:
+                    current_person = None
+                    start_row = 2
+                    
+                    for idx, row in test_output.iterrows():
+                        current_row = idx + 2  # Excel行号（从2开始，1是表头）
+                        
+                        # 检查是否需要合并上一个人员的单元格
+                        if current_person is not None and row['人员'] != current_person:
+                            if start_row < current_row:
+                                # 合并人员列
+                                worksheet.merge_cells(f'A{start_row}:A{current_row - 1}')
+                                # 合并模块数量列
+                                worksheet.merge_cells(f'B{start_row}:B{current_row - 1}')
+                            start_row = current_row
+                        
+                        current_person = row['人员']
+                        
+                        # 设置单元格对齐方式
+                        for col in range(1, 5):
+                            cell = worksheet.cell(row=current_row, column=col)
+                            if col in [1, 2, 4]:  # 人员、模块数量、测试次数居中
+                                cell.alignment = Alignment(horizontal='center', vertical='center')
+                            else:  # 模块名称左对齐
+                                cell.alignment = Alignment(horizontal='left', vertical='center')
+                    
+                    # 处理最后一个人员
+                    if start_row < len(test_output) + 2:
+                        worksheet.merge_cells(f'A{start_row}:A{len(test_output) + 1}')
+                        worksheet.merge_cells(f'B{start_row}:B{len(test_output) + 1}')
+                    
+                    # 设置合并后单元格的对齐方式
+                    for row in range(2, len(test_output) + 2):
+                        worksheet.cell(row=row, column=1).alignment = Alignment(horizontal='center', vertical='center')
+                        worksheet.cell(row=row, column=2).alignment = Alignment(horizontal='center', vertical='center')
+            
             test_buffer.seek(0)
             
             st.download_button(
