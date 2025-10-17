@@ -172,7 +172,7 @@ def ocr_recognize(image_array, lang='chi_sim+eng'):
 
 
 def smart_parse_table(text):
-    """智能解析表格 - 增强版"""
+    """智能解析表格 - 增强版（修复重复列名问题）"""
     if not text or not text.strip():
         return pd.DataFrame()
     
@@ -223,32 +223,81 @@ def smart_parse_table(text):
         )
         
         if first_row_is_header:
-            df = pd.DataFrame(data[1:], columns=data[0])
+            # 使用第一行作为列名，处理重复列名
+            headers = data[0]
+            headers = fix_duplicate_columns(headers)
+            df = pd.DataFrame(data[1:], columns=headers)
         else:
             df = pd.DataFrame(data)
+            # 为DataFrame生成不重复的列名
+            df.columns = fix_duplicate_columns([f'列{i+1}' for i in range(len(df.columns))])
     else:
         df = pd.DataFrame(data)
+        # 为DataFrame生成不重复的列名
+        df.columns = fix_duplicate_columns([f'列{i+1}' for i in range(len(df.columns))])
     
     return df
 
 
+def fix_duplicate_columns(columns):
+    """修复重复的列名"""
+    seen = {}
+    new_columns = []
+    
+    for col in columns:
+        col_str = str(col).strip() if col else '未命名'
+        
+        # 如果列名为空或只有空格，使用默认名称
+        if not col_str or col_str == '':
+            col_str = '未命名'
+        
+        # 如果列名已存在，添加序号
+        if col_str in seen:
+            seen[col_str] += 1
+            new_col = f"{col_str}_{seen[col_str]}"
+        else:
+            seen[col_str] = 0
+            new_col = col_str
+        
+        new_columns.append(new_col)
+    
+    return new_columns
+
+
 def convert_df_to_excel(df):
-    """转换为Excel"""
+    """转换为Excel（处理重复列名）"""
     output = BytesIO()
     
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='识别表格')
+    try:
+        # 创建副本，确保列名唯一
+        df_export = df.copy()
+        df_export.columns = fix_duplicate_columns(df_export.columns.tolist())
         
-        # 自动调整列宽
-        worksheet = writer.sheets['识别表格']
-        for idx, col in enumerate(df.columns):
-            max_length = max(
-                df[col].astype(str).apply(len).max(),
-                len(str(col))
-            )
-            worksheet.column_dimensions[chr(65 + idx)].width = min(max_length + 2, 50)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_export.to_excel(writer, index=False, sheet_name='识别表格')
+            
+            # 自动调整列宽
+            worksheet = writer.sheets['识别表格']
+            for idx, col in enumerate(df_export.columns):
+                try:
+                    max_length = max(
+                        df_export[col].astype(str).apply(len).max(),
+                        len(str(col))
+                    )
+                    col_letter = chr(65 + idx) if idx < 26 else f'A{chr(65 + idx - 26)}'
+                    worksheet.column_dimensions[col_letter].width = min(max_length + 2, 50)
+                except:
+                    pass
+        
+        return output.getvalue()
     
-    return output.getvalue()
+    except Exception as e:
+        st.error(f"生成Excel时出错: {str(e)}")
+        # 返回基础版本
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='识别表格')
+        return output.getvalue()
 
 
 def main():
@@ -256,7 +305,7 @@ def main():
     
     # 页面配置
     st.set_page_config(
-        page_title="正讯OCR表格识别工具",
+        page_title="OCR表格识别工具",
         page_icon="📊",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -285,7 +334,7 @@ def main():
     # 标题
     st.markdown("""
     <div class="main-header">
-        <h1>📊 正讯图片表格识别转Excel工具</h1>
+        <h1>📊 图片表格识别转Excel工具</h1>
         <p>支持 JPG | PNG | PDF | 自动识别 | 一键导出</p>
     </div>
     """, unsafe_allow_html=True)
@@ -457,12 +506,26 @@ Tesseract: {pytesseract.get_tesseract_version() if OCR_AVAILABLE else 'N/A'}
                 # 数据表格
                 if not df.empty:
                     st.markdown("#### 📋 识别的表格数据")
-                    st.dataframe(
-                        df, 
-                        use_container_width=True, 
-                        height=400,
-                        hide_index=True
-                    )
+                    
+                    # 清理DataFrame，确保没有问题
+                    try:
+                        # 重置索引
+                        df_display = df.copy()
+                        df_display = df_display.reset_index(drop=True)
+                        
+                        # 确保列名唯一
+                        df_display.columns = fix_duplicate_columns(df_display.columns.tolist())
+                        
+                        # 显示数据
+                        st.dataframe(
+                            df_display, 
+                            use_container_width=True, 
+                            height=400
+                        )
+                    except Exception as e:
+                        st.error(f"显示数据时出错: {str(e)}")
+                        st.warning("尝试以文本格式显示数据：")
+                        st.text(df.to_string())
                     
                     # 下载按钮
                     excel_data = convert_df_to_excel(df)
@@ -544,7 +607,7 @@ Tesseract: {pytesseract.get_tesseract_version() if OCR_AVAILABLE else 'N/A'}
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #7f8c8d; padding: 1rem;'>
-        <p>📊 正讯OCR 表格识别工具 | Powered by Tesseract OCR & Streamlit</p>
+        <p>📊 OCR Table Extractor | Powered by Tesseract OCR & Streamlit</p>
     </div>
     """, unsafe_allow_html=True)
 
