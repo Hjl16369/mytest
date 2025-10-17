@@ -256,7 +256,7 @@ def main():
     
     # 页面配置
     st.set_page_config(
-        page_title="OCR表格识别工具",
+        page_title="正讯OCR表格识别工具",
         page_icon="📊",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -285,7 +285,7 @@ def main():
     # 标题
     st.markdown("""
     <div class="main-header">
-        <h1>📊 图片表格识别转Excel工具</h1>
+        <h1>📊 正讯图片表格识别转Excel工具</h1>
         <p>支持 JPG | PNG | PDF | 自动识别 | 一键导出</p>
     </div>
     """, unsafe_allow_html=True)
@@ -544,7 +544,7 @@ Tesseract: {pytesseract.get_tesseract_version() if OCR_AVAILABLE else 'N/A'}
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #7f8c8d; padding: 1rem;'>
-        <p>📊 OCR Table Extractor | Powered by Tesseract OCR & Streamlit</p>
+        <p>📊 正讯OCR 表格识别工具 | Powered by Tesseract OCR & Streamlit</p>
     </div>
     """, unsafe_allow_html=True)
 
