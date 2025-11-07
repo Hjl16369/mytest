@@ -26,22 +26,34 @@ if 'checkbox_state' not in st.session_state:
     st.session_state.checkbox_state = {}
 
 def setup_fonts():
-    """设置中文字体"""
+    """设置中文字体 - 使用reportlab内置字体"""
+    try:
+        # 尝试使用reportlab的内置中文字体支持
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        return 'STSong-Light'
+    except:
+        pass
+    
+    # 备选方案：尝试系统字体
     font_paths = [
         "C:/Windows/Fonts/simhei.ttf",  # Windows 黑体
         "C:/Windows/Fonts/simsun.ttc",  # Windows 宋体
         "/System/Library/Fonts/PingFang.ttc",  # macOS
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",  # Linux
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",  # Linux
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # Linux Noto
     ]
     
     for font_path in font_paths:
         if os.path.exists(font_path):
             try:
                 pdfmetrics.registerFont(TTFont('Chinese', font_path))
-                return True
+                return 'Chinese'
             except:
                 continue
-    return False
+    
+    return None
 
 def get_checklist_items():
     """获取自查项目数据"""
@@ -114,23 +126,21 @@ def create_pdf(module_name, developer, start_date, end_date, checkbox_state):
     width, height = A4
     
     # 设置字体
-    font_registered = setup_fonts()
+    font_name = setup_fonts()
     
-    if font_registered:
-        c.setFont("Chinese", 18)
-    else:
-        c.setFont("Helvetica-Bold", 18)
+    # 如果没有中文字体，使用Helvetica但提示用户
+    if not font_name:
+        font_name = 'Helvetica'
+        st.warning("⚠️ 系统未找到中文字体，PDF中的中文可能无法正常显示。建议在本地环境运行。")
     
-    # 标题（中文）
+    # 标题
+    c.setFont(font_name, 18)
     title = "软件开发模块功能自查确认单"
     c.drawCentredString(width/2, height - 2*cm, title)
     
-    if font_registered:
-        c.setFont("Chinese", 13)
-    else:
-        c.setFont("Helvetica", 13)
+    c.setFont(font_name, 13)
     
-    # 基本信息（中文）
+    # 基本信息
     y = height - 3.5*cm
     c.drawString(2*cm, y, f"模块名: {module_name}")
     y -= 0.7*cm
@@ -145,10 +155,7 @@ def create_pdf(module_name, developer, start_date, end_date, checkbox_state):
     c.line(2*cm, y, width - 2*cm, y)
     y -= 0.8*cm
     
-    if font_registered:
-        c.setFont("Chinese", 12)
-    else:
-        c.setFont("Helvetica", 11)
+    c.setFont(font_name, 12)
     
     # 自查项目
     checklist_items = get_checklist_items()
@@ -156,30 +163,19 @@ def create_pdf(module_name, developer, start_date, end_date, checkbox_state):
         # 检查是否需要新页面
         if y < 3*cm:
             c.showPage()
-            if font_registered:
-                c.setFont("Chinese", 12)
-            else:
-                c.setFont("Helvetica", 11)
+            c.setFont(font_name, 12)
             y = height - 2*cm
         
         # 大类标题
-        if font_registered:
-            c.setFont("Chinese", 13)
-            c.drawString(2*cm, y, category)
-            c.setFont("Chinese", 11)
-        else:
-            c.setFont("Helvetica-Bold", 12)
-            c.drawString(2*cm, y, category)
-            c.setFont("Helvetica", 10)
+        c.setFont(font_name, 13)
+        c.drawString(2*cm, y, category)
+        c.setFont(font_name, 11)
         y -= 0.7*cm
         
         for subcat, items in subcategories.items():
             if y < 3*cm:
                 c.showPage()
-                if font_registered:
-                    c.setFont("Chinese", 11)
-                else:
-                    c.setFont("Helvetica", 10)
+                c.setFont(font_name, 11)
                 y = height - 2*cm
             
             # 子类标题
@@ -189,10 +185,7 @@ def create_pdf(module_name, developer, start_date, end_date, checkbox_state):
             for item in items:
                 if y < 3*cm:
                     c.showPage()
-                    if font_registered:
-                        c.setFont("Chinese", 11)
-                    else:
-                        c.setFont("Helvetica", 10)
+                    c.setFont(font_name, 11)
                     y = height - 2*cm
                 
                 # 复选框
@@ -203,10 +196,7 @@ def create_pdf(module_name, developer, start_date, end_date, checkbox_state):
                 text = f"{checkbox} {item}"
                 max_width = width - 5*cm
                 
-                if font_registered:
-                    text_width = c.stringWidth(text, "Chinese", 11)
-                else:
-                    text_width = c.stringWidth(text, "Helvetica", 10)
+                text_width = c.stringWidth(text, font_name, 11)
                 
                 if text_width > max_width:
                     # 简单换行处理
@@ -214,10 +204,7 @@ def create_pdf(module_name, developer, start_date, end_date, checkbox_state):
                     line = ""
                     for word in words:
                         test_line = f"{line} {word}".strip()
-                        if font_registered:
-                            test_width = c.stringWidth(test_line, "Chinese", 11)
-                        else:
-                            test_width = c.stringWidth(test_line, "Helvetica", 10)
+                        test_width = c.stringWidth(test_line, font_name, 11)
                         
                         if test_width > max_width and line:
                             c.drawString(3*cm, y, line)
@@ -234,7 +221,7 @@ def create_pdf(module_name, developer, start_date, end_date, checkbox_state):
         
         y -= 0.3*cm
     
-    # 确认信息（中文）
+    # 确认信息
     if y < 5*cm:
         c.showPage()
         y = height - 2*cm
@@ -243,19 +230,11 @@ def create_pdf(module_name, developer, start_date, end_date, checkbox_state):
     c.line(2*cm, y, width - 2*cm, y)
     y -= 1*cm
     
-    if font_registered:
-        c.setFont("Chinese", 13)
-    else:
-        c.setFont("Helvetica-Bold", 13)
-    
+    c.setFont(font_name, 13)
     c.drawString(2*cm, y, "三、开发人确认")
     y -= 0.8*cm
     
-    if font_registered:
-        c.setFont("Chinese", 12)
-    else:
-        c.setFont("Helvetica", 12)
-    
+    c.setFont(font_name, 12)
     c.drawString(2*cm, y, "我确认上述功能自查都已完成、实现。")
     y -= 1*cm
     
