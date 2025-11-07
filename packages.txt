@@ -1,6 +1,2 @@
-tesseract-ocr
-tesseract-ocr-chi-sim
-tesseract-ocr-eng
-poppler-utils
-libgl1
-libglib2.0-0
+fonts-noto-cjk
+fonts-wqy-zenhei
