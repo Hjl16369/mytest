@@ -1,0 +1,1523 @@
+<html lang="zh-CN"><head>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.13/html-to-image.min.js" integrity="sha512-iZ2ORl595Wx6miw+GuadDet4WQbdSWS3JLMoNfY8cRGoEFy6oT3G9IbcrBeL6AfkgpA51ETt/faX6yLV+/gFJg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+      (function() {
+        const originalConsole = window.console;
+        window.console = {
+          log: (...args) => {
+            originalConsole.log(...args);
+            window.parent.postMessage({ type: 'console', message: args.join(' ') }, '*');
+          },
+          error: (...args) => {
+            originalConsole.error(...args);
+            window.parent.postMessage({ type: 'console', message: 'Error: ' + args.join(' ') }, '*');
+          },
+          warn: (...args) => {
+            originalConsole.warn(...args);
+            window.parent.postMessage({ type: 'console', message: 'Warning: ' + args.join(' ') }, '*');
+          }
+        };
+
+        let requestId = 0;
+        let callbacksMap = new Map();
+        let streamControllers = new Map();
+        
+        window.claude = {
+          complete: (prompt) => {
+            return new Promise((resolve, reject) => {
+              const id = requestId++;
+              callbacksMap.set(id, { resolve, reject });
+              window.parent.postMessage({ type: 'claudeComplete', id, prompt }, '*');
+            });
+          }
+        };
+
+        window.storage = {
+          get: (key, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = requestId++;
+              callbacksMap.set(id, { resolve, reject });
+              window.parent.postMessage({ type: 'storageGet', id, key, shared }, '*');
+            });
+          },
+          set: (key, value, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = requestId++;
+              callbacksMap.set(id, { resolve, reject });
+              window.parent.postMessage({ type: 'storageSet', id, key, value, shared }, '*');
+            });
+          },
+          delete: (key, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = requestId++;
+              callbacksMap.set(id, { resolve, reject });
+              window.parent.postMessage({ type: 'storageDelete', id, key, shared }, '*');
+            });
+          },
+          list: (prefix, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = requestId++;
+              callbacksMap.set(id, { resolve, reject });
+              window.parent.postMessage({ type: 'storageList', id, prefix, shared }, '*');
+            });
+          }
+        };
+
+        let pendingBlobs = new Map();
+        URL.createObjectURL = (blob) => {
+          // Store the blob and create an ID and URL for it
+          const blobId = `blob-${Date.now()}-${Math.random()}`;
+          pendingBlobs.set(blobId, blob);
+          return `blob-request://${blobId}`;
+        };
+
+        URL.revokeObjectURL = (url) => {
+          // Remove the blob from our store
+          const blobId = url.replace("blob-request://", "");
+          pendingBlobs.delete(blobId);
+        };
+
+        const getBlobFromURL = (url) => {
+          const blobId = url.replace("blob-request://", "");
+          return pendingBlobs.get(blobId);
+        };
+
+        // Override global fetch with streaming support
+        window.fetch = (url, init = {}) => {
+          return new Promise((resolve, reject) => {
+            const id = requestId++;
+            const channelId = `fetch-${id}-${Date.now()}`;
+            
+            callbacksMap.set(id, { 
+              resolve: (response) => {
+                // Create a ReadableStream for the response body
+                const stream = new ReadableStream({
+                  start(controller) {
+                    streamControllers.set(channelId, controller);
+                  },
+                  cancel() {
+                    streamControllers.delete(channelId);
+                  }
+                });
+                
+                // Create and return the Response with the stream
+                resolve(new Response(stream, {
+                  status: response.status,
+                  statusText: response.statusText,
+                  headers: response.headers
+                }));
+              },
+              reject,
+              channelId
+            });
+            
+            window.parent.postMessage({
+              type: 'proxyFetch',
+              id,
+              url,
+              init,
+              channelId
+            }, '*');
+          });
+        };
+
+        window.addEventListener('message', async (event) => {
+          if (event.data.type === 'takeScreenshot') {
+            const rootElement = document.getElementById('artifacts-component-root-html');
+            if (!rootElement) {
+              window.parent.postMessage({
+                type: 'screenshotError',
+                error: new Error('Root element not found'),
+              }, '*');
+            }
+            const screenshot = await htmlToImage.toPng(rootElement, {
+              imagePlaceholder:
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAA1JREFUGFdjePDgwX8ACOQDoNsk0PMAAAAASUVORK5CYII=",
+            });
+            window.parent.postMessage({
+              type: 'screenshotData',
+              data: screenshot,
+            }, '*');
+          } else if (event.data.type === 'claudeComplete') {
+            const callback = callbacksMap.get(event.data.id);
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.completion);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'proxyFetchResponse') {
+            const callback = callbacksMap.get(event.data.id);
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+              callbacksMap.delete(event.data.id);
+            } else {
+              // Initial response with headers, status, etc.
+              callback.resolve({
+                status: event.data.status,
+                statusText: event.data.statusText,
+                headers: event.data.headers
+              });
+              // Don't delete the callback yet if streaming
+              if (!event.data.body) {
+                callbacksMap.delete(event.data.id);
+              }
+            }
+          } else if (event.data.type === 'proxyFetchStream') {
+            // Handle streaming data chunks
+            const controller = streamControllers.get(event.data.channelId);
+            if (controller) {
+              if (event.data.error) {
+                controller.error(new Error(event.data.error));
+                streamControllers.delete(event.data.channelId);
+              } else if (event.data.done) {
+                controller.close();
+                streamControllers.delete(event.data.channelId);
+                // Clean up the callback
+                const callback = Array.from(callbacksMap.entries()).find(
+                  ([_, value]) => value.channelId === event.data.channelId
+                );
+                if (callback) {
+                  callbacksMap.delete(callback[0]);
+                }
+              } else if (event.data.chunk) {
+                controller.enqueue(new Uint8Array(event.data.chunk));
+              }
+            }
+          } else if (event.data.type === 'storageGet') {
+            const callback = callbacksMap.get(event.data.id);
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageSet') {
+            const callback = callbacksMap.get(event.data.id);
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageDelete') {
+            const callback = callbacksMap.get(event.data.id);
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageList') {
+            const callback = callbacksMap.get(event.data.id);
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          }
+        });
+
+        window.addEventListener('click', (event) => {
+          const isEl = event.target instanceof HTMLElement;
+          if (!isEl) return;
+    
+          // find ancestor links
+          const linkEl = event.target.closest("a");
+          if (!linkEl || !linkEl.href) return;
+    
+          event.preventDefault();
+          event.stopImmediatePropagation();
+    
+          if (linkEl.href.startsWith("blob-request:")) {
+            const blob = getBlobFromURL(linkEl.href);
+            if (!blob) return;
+            void blob.arrayBuffer().then((data) => {
+              window.parent.postMessage({
+                type: "downloadFile",
+                filename: linkEl.download,
+                data,
+                mimeType: blob.type || "application/octet-stream",
+              });
+            });
+          } else if (linkEl.href.startsWith("data:")) {
+            const [header, base64Data] = linkEl.href.split(",");
+            const mimeMatch = header.match(/data:([^;]+)/);
+            const mimeType = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+            const binaryString = atob(base64Data);
+            const data = Uint8Array.from(binaryString, (c) =>
+              c.charCodeAt(0),
+            ).buffer;
+            window.parent.postMessage({
+              type: "downloadFile",
+              filename: linkEl.download,
+              data,
+              mimeType,
+            });
+          } else {
+            let linkUrl;
+            try {
+              linkUrl = new URL(linkEl.href);
+            } catch (error) {
+              return;
+            }
+    
+            if (linkUrl.hostname === window.location.hostname) return;
+      
+            window.parent.postMessage({
+              type: 'openExternal',
+              href: linkEl.href,
+            }, '*');
+          }
+      });
+
+        const originalOpen = window.open;
+        window.open = function (url) {
+          window.parent.postMessage({
+            type: "openExternal",
+            href: url,
+          }, "*");
+        };
+
+        window.addEventListener('error', (event) => {
+          window.parent.postMessage({ type: 'console', message: 'Uncaught Error: ' + event.message }, '*');
+        });
+      })();
+    </script>
+  
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>医药市场稽查管理系统PPT</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: #1a1a2e;
+            color: #fff;
+            overflow-x: hidden;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .slide {
+            width: 100%;
+            min-height: 100vh;
+            padding: 60px 80px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            margin-bottom: 40px;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .slide::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="none"/><path d="M0 0L100 100M100 0L0 100" stroke="rgba(255,255,255,0.03)" stroke-width="1"/></svg>');
+            opacity: 0.5;
+        }
+
+        .slide-number {
+            position: absolute;
+            bottom: 30px;
+            right: 40px;
+            font-size: 18px;
+            color: rgba(255, 255, 255, 0.5);
+            font-weight: bold;
+        }
+
+        .slide-cover {
+            background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+            text-align: center;
+            justify-content: center;
+        }
+
+        .slide-cover h1 {
+            font-size: 56px;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: fadeInDown 1s;
+        }
+
+        .slide-cover h2 {
+            font-size: 32px;
+            color: #64b5f6;
+            margin-bottom: 40px;
+            animation: fadeInUp 1s 0.3s both;
+        }
+
+        .slide-cover .subtitle {
+            font-size: 20px;
+            color: rgba(255, 255, 255, 0.7);
+            animation: fadeIn 1s 0.6s both;
+        }
+
+        h1 {
+            font-size: 42px;
+            margin-bottom: 40px;
+            color: #fff;
+            position: relative;
+            padding-bottom: 15px;
+            z-index: 1;
+        }
+
+        h1::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100px;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            border-radius: 2px;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin-top: 30px;
+            z-index: 1;
+            position: relative;
+        }
+
+        .pain-points {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .pain-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 12px;
+            border-left: 4px solid #ef5350;
+            transition: all 0.3s;
+        }
+
+        .pain-item:hover {
+            transform: translateX(10px);
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .pain-item strong {
+            color: #ef5350;
+            font-size: 18px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 25px;
+            border-radius: 12px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .stat-number {
+            font-size: 36px;
+            font-weight: bold;
+            color: #ffa726;
+            margin-bottom: 10px;
+        }
+
+        .stat-label {
+            font-size: 16px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .flow-diagram {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 40px 0;
+            padding: 30px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .flow-step {
+            text-align: center;
+            flex: 1;
+            position: relative;
+        }
+
+        .flow-step::after {
+            content: '→';
+            position: absolute;
+            right: -20px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 24px;
+            color: #64b5f6;
+        }
+
+        .flow-step:last-child::after {
+            display: none;
+        }
+
+        .flow-icon {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 15px;
+            font-size: 24px;
+        }
+
+        .flow-label {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: bold;
+        }
+
+        .module-grid {
+            display: grid;
+            grid-template-columns: 1fr 1.5fr;
+            gap: 40px;
+            margin-top: 30px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .feature-list {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .feature-item {
+            background: rgba(255, 255, 255, 0.08);
+            padding: 20px;
+            border-radius: 10px;
+            border-left: 3px solid #4caf50;
+            transition: all 0.3s;
+        }
+
+        .feature-item:hover {
+            background: rgba(255, 255, 255, 0.12);
+            transform: translateX(5px);
+        }
+
+        .mockup {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            border: 2px dashed rgba(255, 255, 255, 0.3);
+        }
+
+        .mockup-stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            width: 100%;
+        }
+
+        .mockup-card {
+            background: rgba(100, 181, 246, 0.2);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .mockup-number {
+            font-size: 32px;
+            font-weight: bold;
+            color: #64b5f6;
+        }
+
+        .process-flow {
+            display: flex;
+            justify-content: space-between;
+            margin: 30px 0;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .process-step {
+            flex: 1;
+            text-align: center;
+            padding: 15px;
+            position: relative;
+        }
+
+        .process-step::after {
+            content: '▶';
+            position: absolute;
+            right: -15px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #4caf50;
+            font-size: 20px;
+        }
+
+        .process-step:last-child::after {
+            display: none;
+        }
+
+        .process-badge {
+            background: linear-gradient(135deg, #4caf50 0%, #66bb6a 100%);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            display: inline-block;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+
+        .table {
+            width: 100%;
+            margin-top: 30px;
+            border-collapse: separate;
+            border-spacing: 0 10px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .table th {
+            background: rgba(102, 126, 234, 0.3);
+            padding: 15px;
+            text-align: left;
+            font-weight: bold;
+            color: #fff;
+        }
+
+        .table td {
+            background: rgba(255, 255, 255, 0.08);
+            padding: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .table tr:hover td {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        .highlight-box {
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
+            border: 2px solid rgba(102, 126, 234, 0.5);
+            padding: 25px;
+            border-radius: 12px;
+            margin-top: 30px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .achievement-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+            margin-top: 30px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .achievement {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 25px;
+            border-radius: 12px;
+            text-align: center;
+            border: 2px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .achievement:hover {
+            border-color: #ffa726;
+            transform: translateY(-5px);
+        }
+
+        .achievement-icon {
+            font-size: 36px;
+            margin-bottom: 15px;
+        }
+
+        .achievement-value {
+            font-size: 28px;
+            font-weight: bold;
+            color: #ffa726;
+            margin-bottom: 10px;
+        }
+
+        .vision-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            margin-top: 40px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .vision-box blockquote {
+            font-size: 22px;
+            line-height: 1.6;
+            font-style: italic;
+            margin-bottom: 20px;
+        }
+
+        .vision-tags {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .vision-tag {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+
+        @media print {
+            .controls {
+                display: none;
+            }
+            .slide {
+                page-break-after: always;
+                margin-bottom: 0;
+            }
+        }
+    </style>
+</head>
+<body id="artifacts-component-root-html" data-new-gr-c-s-check-loaded="14.1263.0" data-gr-ext-installed="">
+    <div class="controls">
+        <button class="btn" onclick="window.print()">📄 打印/保存PDF</button>
+        <button class="btn" onclick="downloadHTML()">💾 下载HTML文件</button>
+    </div>
+
+    <div class="container">
+        <!-- 第1页：封面 -->
+        <div class="slide slide-cover" style="opacity: 1; transform: translateY(0px); transition: opacity 0.6s, transform 0.6s;">
+            <h1>终结窜货乱价：智能稽查系统</h1>
+            <h2>重塑医药市场秩序新范式</h2>
+            <p class="subtitle">医药市场稽查管理系统解决方案</p>
+        </div>
+
+        <!-- 第2页：行业痛点 -->
+        <div class="slide" style="opacity: 1; transform: translateY(0px); transition: opacity 0.6s, transform 0.6s;">
+            <h1>窜货乱价——医药企业难以言说的"内伤"</h1>
+            <div class="content-grid">
+                <div class="pain-points">
+                    <h2 style="color: #ef5350; margin-bottom: 20px;">五大核心痛点</h2>
+                    <div class="pain-item">
+                        <strong>🔴 价格体系崩塌</strong>
+                        <p>乱价行为侵蚀产品价格空间，渠道利润下滑，经销商积极性受挫</p>
+                    </div>
+                    <div class="pain-item">
+                        <strong>🔴 市场秩序混乱</strong>
+                        <p>窜货破坏区域独家经销契约，引发恶性竞争，损害厂商互信</p>
+                    </div>
+                    <div class="pain-item">
+                        <strong>🔴 企业利润流失</strong>
+                        <p>价格穿底导致营收和利润下降，市场投入ROI持续降低</p>
+                    </div>
+                    <div class="pain-item">
+                        <strong>🔴 品牌形象受损</strong>
+                        <p>价格混乱让终端客户对品牌正规性和稳定性产生质疑</p>
+                    </div>
+                    <div class="pain-item">
+                        <strong>🔴 稽查成本高昂</strong>
+                        <p>传统人工稽查效率低下，发现难、取证难、处理慢、执行弱</p>
+                    </div>
+                </div>
+
+                <div>
+                    <h2 style="color: #ffa726; margin-bottom: 20px;">数据冲击</h2>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-number">7-15天</div>
+                            <div class="stat-label">传统稽查响应周期</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">&lt; 60%</div>
+                            <div class="stat-label">证据完整率</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">18%</div>
+                            <div class="stat-label">违规重复率</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">35%</div>
+                            <div class="stat-label">人工稽查成本占比</div>
+                        </div>
+                    </div>
+                    <div class="highlight-box" style="margin-top: 40px;">
+                        <h3 style="color: #64b5f6; margin-bottom: 15px;">痛点根源</h3>
+                        <p style="font-size: 18px; line-height: 1.8;">
+                            <strong>区域差异化定价</strong> + <strong>渠道分级授权</strong> = <strong style="color: #ef5350;">窜货乱价温床</strong>
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-number">2/10</div>
+        </div>
+
+        <!-- 第3页：流程与架构 -->
+        <div class="slide" style="opacity: 1; transform: translateY(0px); transition: opacity 0.6s, transform 0.6s;">
+            <h1>八大流程闭环 × 七大核心模块</h1>
+            <h2 style="color: #64b5f6; font-size: 24px; margin-bottom: 30px; position: relative; z-index: 1;">构建智能稽查新范式</h2>
+            
+            <h3 style="color: #4caf50; margin-bottom: 20px; font-size: 20px; position: relative; z-index: 1;">业务流程（横向闭环）</h3>
+            <div class="flow-diagram">
+                <div class="flow-step">
+                    <div class="flow-icon">📊</div>
+                    <div class="flow-label">数据采集</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-icon">🧠</div>
+                    <div class="flow-label">智能分析</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-icon">⚠️</div>
+                    <div class="flow-label">风险预警</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-icon">📋</div>
+                    <div class="flow-label">案件立案</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-icon">🔍</div>
+                    <div class="flow-label">调查取证</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-icon">⚖️</div>
+                    <div class="flow-label">处理决策</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-icon">✅</div>
+                    <div class="flow-label">执行监督</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-icon">🔄</div>
+                    <div class="flow-label">闭环反馈</div>
+                </div>
+            </div>
+
+            <h3 style="color: #4caf50; margin: 40px 0 20px; font-size: 20px; position: relative; z-index: 1;">系统架构（模块化设计）</h3>
+            <div style="display: flex; justify-content: center; align-items: center; gap: 30px; margin-top: 30px; position: relative; z-index: 1;">
+                <div style="text-align: center;">
+                    <div style="width: 180px; height: 180px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold; box-shadow: 0 10px 30px rgba(102, 126, 234, 0.5);">
+                        🎯<br>智能监控<br>驾驶舱
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;">
+                    <div style="background: rgba(76, 175, 80, 0.2); padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #4caf50;">
+                        📂 案件管理
+                    </div>
+                    <div style="background: rgba(76, 175, 80, 0.2); padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #4caf50;">
+                        🔍 调查取证
+                    </div>
+                    <div style="background: rgba(76, 175, 80, 0.2); padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #4caf50;">
+                        ⚖️ 审批决策
+                    </div>
+                    <div style="background: rgba(76, 175, 80, 0.2); padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #4caf50;">
+                        🚫 黑名单管理
+                    </div>
+                    <div style="background: rgba(76, 175, 80, 0.2); padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #4caf50;">
+                        ✅ 执行监督
+                    </div>
+                    <div style="background: rgba(76, 175, 80, 0.2); padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #4caf50;">
+                        📊 数据分析
+                    </div>
+                </div>
+            </div>
+
+            <div class="highlight-box">
+                <p style="font-size: 18px; text-align: center;">
+                    <strong>数据驱动</strong> + <strong>流程闭环</strong> + <strong>智能预警</strong> + <strong>高效执行</strong>
+                </p>
+            </div>
+            <div class="slide-number">3/10</div>
+        </div>
+
+        <!-- 第4页：智能监控驾驶舱 -->
+        <div class="slide" style="opacity: 1; transform: translateY(0px); transition: opacity 0.6s, transform 0.6s;">
+            <h1>🎯 智能监控驾驶舱</h1>
+            <h2 style="color: #64b5f6; font-size: 24px; margin-bottom: 30px; position: relative; z-index: 1;">全局态势感知，管理层的"作战地图"</h2>
+            
+            <div class="module-grid">
+                <div class="feature-list">
+                    <h3 style="color: #4caf50; margin-bottom: 20px;">核心功能</h3>
+                    <div class="feature-item">
+                        <strong>✅ 实时报警流</strong>
+                        <p>按风险评分自动排序，一眼识别最紧急事项</p>
+                    </div>
+                    <div class="feature-item">
+                        <strong>✅ 关键指标监控</strong>
+                        <p>活跃报警 / 待处理案件 / 调查中案件 / 结案率</p>
+                    </div>
+                    <div class="feature-item">
+                        <strong>✅ 趋势分析</strong>
+                        <p>案件类型分布（窜货/乱价） + 高发区域TOP5</p>
+                    </div>
+                    <div class="feature-item">
+                        <strong>✅ 数据可视化</strong>
+                        <p>图表 + 进度条 + 热力地图，直观呈现全局态势</p>
+                    </div>
+                </div>
+
+                <div class="mockup">
+                    <h3 style="margin-bottom: 25px; color: #64b5f6;">驾驶舱界面示意</h3>
+                    <div class="mockup-stats">
+                        <div class="mockup-card">
+                            <div class="mockup-number">87</div>
+                            <div>案件预警</div>
+                        </div>
+                        <div class="mockup-card">
+                            <div class="mockup-number">42</div>
+                            <div>待处理</div>
+                        </div>
+                        <div class="mockup-card">
+                            <div class="mockup-number">28</div>
+                            <div>调查中</div>
+                        </div>
+                        <div class="mockup-card">
+                            <div class="mockup-number">87.5%</div>
+                            <div>结案率</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 30px; padding: 20px; background: rgba(255, 165, 0, 0.2); border-radius: 8px; border-left: 4px solid #ffa726;">
+                        <strong>⚠️ 高风险预警</strong>
+                        <p style="margin-top: 10px;">华东区检出跨区窜货 | 风险评分: 92分</p>
+                        <p>涉及金额: ¥58万 | 授权区域: 上海 → 检出地: 杭州</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="highlight-box">
+                <h3 style="color: #ffa726; margin-bottom: 15px;">💎 业务价值</h3>
+                <p style="font-size: 18px; line-height: 1.8;">
+                    让管理层一眼掌握全国市场稽查态势，<strong>运筹帷幄，决胜千里</strong>
+                </p>
+            </div>
+            <div class="slide-number">4/10</div>
+        </div>
+
+        <!-- 第5页：案件管理系统 -->
+        <div class="slide" style="opacity: 1; transform: translateY(0px); transition: opacity 0.6s, transform 0.6s;">
+            <h1>📂 案件管理系统</h1>
+            <h2 style="color: #64b5f6; font-size: 24px; margin-bottom: 30px; position: relative; z-index: 1;">全生命周期管理，案件进展"零盲区"</h2>
+            
+            <h3 style="color: #4caf50; margin-bottom: 20px; position: relative; z-index: 1;">案件状态流转</h3>
+            <div class="process-flow">
+                <div class="process-step">
+                    <div class="process-badge">待处理</div>
+                    <p style="font-size: 14px; color: rgba(255,255,255,0.8); margin-top: 8px;">报警审核</p>
+                </div>
+                <div class="process-step">
+                    <div class="process-badge" style="background: linear-gradient(135deg, #ff9800 0%, #ffa726 100%);">调查中</div>
+                    <p style="font-size: 14px; color: rgba(255,255,255,0.8); margin-top: 8px;">证据收集</p>
+                </div>
+                <div class="process-step">
+                    <div class="process-badge" style="background: linear-gradient(135deg, #2196f3 0%, #42a5f5 100%);">取证中</div>
+                    <p style="font-size: 14px; color: rgba(255,255,255,0.8); margin-top: 8px;">完整性校验</p>
+                </div>
+                <div class="process-step">
+                    <div class="process-badge" style="background: linear-gradient(135deg, #9c27b0 0%, #ab47bc 100%);">待审批</div>
+                    <p style="font-size: 14px; color: rgba(255,255,255,0.8); margin-top: 8px;">多级审核</p>
+                </div>
+                <div class="process-step">
+                    <div class="process-badge" style="background: linear-gradient(135deg, #f44336 0%, #ef5350 100%);">执行中</div>
+                    <p style="font-size: 14px; color: rgba(255,255,255,0.8); margin-top: 8px;">处罚落地</p>
+                </div>
+                <div class="process-step">
+                    <div class="process-badge" style="background: linear-gradient(135deg, #607d8b 0%, #78909c 100%);">已结案</div>
+                    <p style="font-size: 14px; color: rgba(255,255,255,0.8); margin-top: 8px;">归档评估</p>
+                </div>
+            </div>
+
+            <div class="content-grid">
+                <div class="feature-list">
+                    <h3 style="color: #4caf50; margin-bottom: 20px;">核心功能</h3>
+                    <div class="feature-item">
+                        <strong>🔹 进度可视化</strong>
+                        <p>每个案件显示完成百分比 + 时间轴，进度一目了然</p>
+                    </div>
+                    <div class="feature-item">
+                        <strong>🔹 多维信息</strong>
+                        <p>涉及主体 / 区域 / 调查人员 / 预估损失全面展示</p>
+                    </div>
+                    <div class="feature-item">
+                        <strong>🔹 智能筛选</strong>
+                        <p>按状态 / 时间 / 区域快速定位，高效查找案件</p>
+                    </div>
+                    <div class="feature-item">
+                        <strong>🔹 一键导出</strong>
+                        <p>生成案件报告和统计分析，支持多种格式</p>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 style="color: #64b5f6; margin-bottom: 20px;">业务流程</h3>
+                    <div style="background: rgba(255,255,255,0.08); padding: 25px; border-radius: 12px;">
+                        <div style="display: flex; flex-direction: column; gap: 15px;">
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <div style="width: 40px; height: 40px; background: #4caf50; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">1</div>
+                                <div><strong>报警触发</strong> → 系统自动推送预警信息</div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <div style="width: 40px; height: 40px; background: #2196f3; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">2</div>
+                                <div><strong>立案审核</strong> → 区域经理确认是否立案</div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <div style="width: 40px; height: 40px; background: #ff9800; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">3</div>
+                                <div><strong>分配责任人</strong> → 指定调查员和期限</div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <div style="width: 40px; height: 40px; background: #9c27b0; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">4</div>
+                                <div><strong>进度跟踪</strong> → 实时更新案件状态</div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <div style="width: 40px; height: 40px; background: #607d8b; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">5</div>
+                                <div><strong>结案归档</strong> → 经验总结和数据沉淀</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="highlight-box">
+                <h3 style="color: #ffa726; margin-bottom: 15px;">💎 业务价值</h3>
+                <p style="font-size: 18px; line-height: 1.8;">
+                    让每个案件都有<strong>明确责任人和时限</strong>，实现"事有人管，责有人担"
+                </p>
+            </div>
+            <div class="slide-number">5/10</div>
+        </div>
+
+        <!-- 第6页：调查取证平台 -->
+        <div class="slide" style="opacity: 1; transform: translateY(0px); transition: opacity 0.6s, transform 0.6s;">
+            <h1>🔍 调查取证平台</h1>
+            <h2 style="color: #64b5f6; font-size: 24px; margin-bottom: 30px; position: relative; z-index: 1;">证据链完整性保障，让违规者无处遁形</h2>
+            
+            <div class="module-grid">
+                <div>
+                    <h3 style="color: #4caf50; margin-bottom: 20px;">三大证据来源</h3>
+                    <div class="feature-list">
+                        <div class="feature-item" style="border-left-color: #2196f3;">
+                            <strong>1️⃣ 在线证据</strong>
+                            <p>• 流向数据自动采集</p>
+                            <p>• 批次追踪完整记录</p>
+                            <p>• 价格信息实时抓取</p>
+                            <p>• 供应链关系图自动生成</p>
+                        </div>
+                        <div class="feature-item" style="border-left-color: #ff9800;">
+                            <strong>2️⃣ 现场证据</strong>
+                            <p>• 现场照片（带水印时间戳）</p>
+                            <p>• 录音文件（格式化存储）</p>
+                            <p>• 访谈笔录（结构化记录）</p>
+                            <p>• GPS定位（精确到米级）</p>
+                        </div>
+                        <div class="feature-item" style="border-left-color: #9c27b0;">
+                            <strong>3️⃣ 证据链校验</strong>
+                            <p>• 完整性自动检测</p>
+                            <p>• 时间线连贯性验证</p>
+                            <p>• 可追溯性评估</p>
+                            <p>• <strong style="color: #4caf50;">证据完整性评分：95%</strong></p>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 style="color: #64b5f6; margin-bottom: 20px;">供应链追溯可视化</h3>
+                    <div style="background: rgba(255,255,255,0.08); padding: 30px; border-radius: 12px;">
+                        <div style="display: flex; flex-direction: column; gap: 20px;">
+                            <div style="background: rgba(76, 175, 80, 0.3); padding: 20px; border-radius: 8px; border-left: 4px solid #4caf50;">
+                                <strong>✅ 厂家发货</strong>
+                                <p style="margin-top: 8px; font-size: 14px;">批次号: 20231115-A01</p>
+                            </div>
+                            <div style="text-align: center; font-size: 24px;">↓</div>
+                            <div style="background: rgba(76, 175, 80, 0.3); padding: 20px; border-radius: 8px; border-left: 4px solid #4caf50;">
+                                <strong>✅ 一级经销商（授权区域）</strong>
+                                <p style="margin-top: 8px; font-size: 14px;">上海XX医药有限公司</p>
+                            </div>
+                            <div style="text-align: center; font-size: 24px;">↓</div>
+                            <div style="background: rgba(239, 83, 80, 0.3); padding: 20px; border-radius: 8px; border-left: 4px solid #ef5350;">
+                                <strong>⚠️ 二级经销商（违规区域）</strong>
+                                <p style="margin-top: 8px; font-size: 14px; color: #ef5350;">杭州XX药业（未授权区域）</p>
+                            </div>
+                            <div style="text-align: center; font-size: 24px;">↓</div>
+                            <div style="background: rgba(255, 152, 0, 0.3); padding: 20px; border-radius: 8px; border-left: 4px solid #ff9800;">
+                                <strong>🎯 终端检出地</strong>
+                                <p style="margin-top: 8px; font-size: 14px;">杭州市某三甲医院</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 20px; background: rgba(102, 126, 234, 0.2); padding: 15px; border-radius: 8px; text-align: center;">
+                        <strong style="color: #667eea;">🔧 一键生成调查报告</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="highlight-box">
+                <h3 style="color: #ffa726; margin-bottom: 15px;">💎 业务价值</h3>
+                <p style="font-size: 18px; line-height: 1.8;">
+                    线上+线下证据相互印证，全链路可追溯，<strong>让每一次处罚都有坚实的证据支撑</strong>
+                </p>
+            </div>
+            <div class="slide-number">6/10</div>
+        </div>
+
+        <!-- 第7页：处罚决策系统 -->
+        <div class="slide" style="opacity: 1; transform: translateY(0px); transition: opacity 0.6s, transform 0.6s;">
+            <h1>⚖️ 处罚决策系统</h1>
+            <h2 style="color: #64b5f6; font-size: 24px; margin-bottom: 30px; position: relative; z-index: 1;">多级审批流程，处罚有据可依</h2>
+            
+            <h3 style="color: #4caf50; margin-bottom: 20px; position: relative; z-index: 1;">审批流程链</h3>
+            <div class="process-flow">
+                <div class="process-step">
+                    <div class="process-badge">区域经理</div>
+                    <p style="font-size: 14px; margin-top: 10px;">初步审核</p>
+                </div>
+                <div class="process-step">
+                    <div class="process-badge" style="background: linear-gradient(135deg, #2196f3 0%, #42a5f5 100%);">大区总监</div>
+                    <p style="font-size: 14px; margin-top: 10px;">二级审批</p>
+                </div>
+                <div class="process-step">
+                    <div class="process-badge" style="background: linear-gradient(135deg, #9c27b0 0%, #ab47bc 100%);">总部审批</div>
+                    <p style="font-size: 14px; margin-top: 10px;">最终决策</p>
+                </div>
+                <div class="process-step">
+                    <div class="process-badge" style="background: linear-gradient(135deg, #f44336 0%, #ef5350 100%);">法务审核</div>
+                    <p style="font-size: 14px; margin-top: 10px;">重大案件</p>
+                </div>
+            </div>
+
+            <h3 style="color: #4caf50; margin: 30px 0 20px; position: relative; z-index: 1;">处罚措施智能推荐</h3>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>处罚类型</th>
+                        <th>计算依据</th>
+                        <th>处罚示例</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>💰 经济处罚</strong></td>
+                        <td>违规金额 × 倍数 + 次数系数</td>
+                        <td><span style="color: #ffa726;">罚款 5-50万元</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>🚫 供货限制</strong></td>
+                        <td>影响范围 + 历史记录</td>
+                        <td><span style="color: #ffa726;">暂停 3/6/12个月</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>📋 整改要求</strong></td>
+                        <td>违规严重程度</td>
+                        <td><span style="color: #ffa726;">提交方案 + 定期复查</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>⛔ 永久取消</strong></td>
+                        <td>累计违规 ≥ 3次</td>
+                        <td><span style="color: #ef5350;">加入永久黑名单</span></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="content-grid" style="margin-top: 30px;">
+                <div class="highlight-box" style="margin-top: 0;">
+                    <h4 style="color: #64b5f6; margin-bottom: 15px;">决策支持信息</h4>
+                    <ul style="list-style: none; padding: 0;">
+                        <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">✓ 违规事实清单</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">✓ 证据链完整性评分</li>
+                        <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">✓ 历史违规记录</li>
+                        <li style="padding: 8px 0;">✓ 相关法律条款引用</li>
+                    </ul>
+                </div>
+                <div class="highlight-box" style="margin-top: 0;">
+                    <h4 style="color: #ffa726; margin-bottom: 15px;">💎 业务价值</h4>
+                    <p style="line-height: 1.8;">让每一次处罚都<strong>公平、公正、公开</strong>，避免滥用权力，确保决策的<strong>严谨性与权威性</strong></p>
+                </div>
+            </div>
+            <div class="slide-number">7/10</div>
+        </div>
+
+        <!-- 第8页：黑名单管理 -->
+        <div class="slide" style="opacity: 1; transform: translateY(0px); transition: opacity 0.6s, transform 0.6s;">
+            <h1>🚫 黑名单管理</h1>
+            <h2 style="color: #64b5f6; font-size: 24px; margin-bottom: 30px; position: relative; z-index: 1;">违规主体档案，震慑效果立竿见影</h2>
+            
+            <div class="module-grid">
+                <div>
+                    <h3 style="color: #4caf50; margin-bottom: 20px;">分级管理机制</h3>
+                    <div style="background: rgba(255, 152, 0, 0.2); padding: 30px; border-radius: 12px; margin-bottom: 25px; border-left: 4px solid #ff9800;">
+                        <h4 style="color: #ff9800; margin-bottom: 15px;">📊 暂停合作</h4>
+                        <ul style="list-style: none; padding: 0;">
+                            <li style="padding: 8px 0;">• 观察期：6个月</li>
+                            <li style="padding: 8px 0;">• 整改后可申请恢复</li>
+                            <li style="padding: 8px 0;">• 实时监控状态</li>
+                            <li style="padding: 8px 0;">• 需提交整改报告</li>
+                        </ul>
+                    </div>
+
+                    <div style="background: rgba(239, 83, 80, 0.2); padding: 30px; border-radius: 12px; border-left: 4px solid #ef5350;">
+                        <h4 style="color: #ef5350; margin-bottom: 15px;">⛔ 永久黑名单</h4>
+                        <ul style="list-style: none; padding: 0;">
+                            <li style="padding: 8px 0;">• 严重或多次违规（≥3次）</li>
+                            <li style="padding: 8px 0;">• 永久取消合作资格</li>
+                            <li style="padding: 8px 0;">• 全网公示警示</li>
+                            <li style="padding: 8px 0;">• 不可恢复合作关系</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 style="color: #4caf50; margin-bottom: 20px;">详细档案内容</h3>
+                    <div style="background: rgba(255,255,255,0.08); padding: 25px; border-radius: 12px; margin-bottom: 20px;">
+                        <div style="margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.2);">
+                            <div style="color: #64b5f6; margin-bottom: 8px;">违规主体</div>
+                            <div style="font-size: 18px; font-weight: bold;">杭州XX药业有限公司</div>
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                            <div>
+                                <div style="color: rgba(255,255,255,0.6); font-size: 14px;">违规次数</div>
+                                <div style="font-size: 24px; color: #ef5350; font-weight: bold;">3次</div>
+                            </div>
+                            <div>
+                                <div style="color: rgba(255,255,255,0.6); font-size: 14px;">累计处罚金额</div>
+                                <div style="font-size: 24px; color: #ff9800; font-weight: bold;">¥127万</div>
+                            </div>
+                        </div>
+                        <div style="background: rgba(239, 83, 80, 0.2); padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                            <strong style="color: #ef5350;">最近违规行为</strong>
+                            <p style="margin-top: 8px; font-size: 14px;">华东跨区窜货 + 低价倾销</p>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 14px;">
+                            <div><span style="color: rgba(255,255,255,0.6);">加入日期：</span>2023-11-01</div>
+                            <div><span style="color: rgba(255,255,255,0.6);">状态：</span><span style="color: #ef5350;">永久黑名单</span></div>
+                        </div>
+                    </div>
+
+                    <div style="background: rgba(102, 126, 234, 0.2); padding: 20px; border-radius: 12px; border: 2px solid #667eea;">
+                        <h4 style="color: #667eea; margin-bottom: 15px;">🔗 系统联动</h4>
+                        <ul style="list-style: none; padding: 0;">
+                            <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">✓ 自动同步到ERP系统</li>
+                            <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">✓ 阻止下单和发货操作</li>
+                            <li style="padding: 8px 0;">✓ 预警合作风险提示</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="highlight-box">
+                <h3 style="color: #ffa726; margin-bottom: 15px;">💎 震慑效果</h3>
+                <p style="font-size: 20px; line-height: 1.8; text-align: center;">
+                    <strong style="color: #4caf50;">黑名单制度使重复违规率从 18% 降至 5%</strong>
+                </p>
+            </div>
+            <div class="slide-number">8/10</div>
+        </div>
+
+        <!-- 第9页：执行监督 & 数据分析 -->
+        <div class="slide" style="opacity: 1; transform: translateY(0px); transition: opacity 0.6s, transform 0.6s;">
+            <h1>📊 执行监督 &amp; 数据分析中心</h1>
+            <h2 style="color: #64b5f6; font-size: 24px; margin-bottom: 30px; position: relative; z-index: 1;">刚性执行 + 智慧洞察，形成管理闭环</h2>
+            
+            <div class="module-grid">
+                <div>
+                    <h3 style="color: #4caf50; margin-bottom: 20px;">✅ 执行监督模块</h3>
+                    <div class="feature-list">
+                        <div class="feature-item">
+                            <strong>处罚决定下发</strong>
+                            <p>自动生成处罚通知书，多渠道送达</p>
+                        </div>
+                        <div class="feature-item">
+                            <strong>罚款缴纳跟踪</strong>
+                            <p>实时监控缴纳进度，逾期自动提醒</p>
+                        </div>
+                        <div class="feature-item">
+                            <strong>供应链系统联动</strong>
+                            <p>自动暂停供货，阻止违规者下单</p>
+                        </div>
+                        <div class="feature-item">
+                            <strong>整改措施验收</strong>
+                            <p>定期复查，确认整改落实情况</p>
+                        </div>
+                        <div class="feature-item" style="border-left-color: #ffa726;">
+                            <strong style="color: #ffa726;">执行进度100%可视</strong>
+                            <p>让处罚100%落地，杜绝"纸上处罚"</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 style="color: #4caf50; margin-bottom: 20px;">📊 数据分析中心</h3>
+                    <div style="background: rgba(255,255,255,0.08); padding: 25px; border-radius: 12px; margin-bottom: 20px;">
+                        <h4 style="color: #64b5f6; margin-bottom: 15px;">核心分析模块</h4>
+                        <div style="display: flex; flex-direction: column; gap: 12px;">
+                            <div style="background: rgba(100, 181, 246, 0.2); padding: 12px; border-radius: 6px;">
+                                <strong>📈 案件趋势分析</strong>
+                                <p style="font-size: 14px; margin-top: 5px;">窜货/乱价/结案三条趋势线</p>
+                            </div>
+                            <div style="background: rgba(76, 175, 80, 0.2); padding: 12px; border-radius: 6px;">
+                                <strong>🗺️ 区域对比分析</strong>
+                                <p style="font-size: 14px; margin-top: 5px;">案件分布 + 处罚金额热力图</p>
+                            </div>
+                            <div style="background: rgba(255, 152, 0, 0.2); padding: 12px; border-radius: 6px;">
+                                <strong>🥧 案件类型统计</strong>
+                                <p style="font-size: 14px; margin-top: 5px;">窜货65% | 乱价28% | 混合7%</p>
+                            </div>
+                            <div style="background: rgba(156, 39, 176, 0.2); padding: 12px; border-radius: 6px;">
+                                <strong>⏱️ 响应时间分析</strong>
+                                <p style="font-size: 14px; margin-top: 5px;">识别流程瓶颈，优化处理效率</p>
+                            </div>
+                            <div style="background: rgba(239, 83, 80, 0.2); padding: 12px; border-radius: 6px;">
+                                <strong>🎯 稽查能力雷达图</strong>
+                                <p style="font-size: 14px; margin-top: 5px;">五维评估：速度/效率/完整/结案/满意</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="background: rgba(102, 126, 234, 0.2); padding: 20px; border-radius: 12px; border: 2px solid #667eea;">
+                        <h4 style="color: #667eea; margin-bottom: 15px;">💡 智能洞察</h4>
+                        <div style="margin-bottom: 10px;">
+                            <strong style="color: #ffa726;">⚠️ 重点关注：</strong>
+                            <span>华东区窜货占比65%，建议加强监控</span>
+                        </div>
+                        <div>
+                            <strong style="color: #4caf50;">✓ 积极信号：</strong>
+                            <span>违规案件环比下降32%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="highlight-box">
+                <h3 style="color: #ffa726; margin-bottom: 15px;">💎 双重价值</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 15px;">
+                    <div>
+                        <strong style="color: #4caf50;">执行监督：</strong>
+                        <span>让处罚100%落地，杜绝"纸上处罚"</span>
+                    </div>
+                    <div>
+                        <strong style="color: #64b5f6;">数据分析：</strong>
+                        <span>从"事后应对"转向"事前预警+事中干预"</span>
+                    </div>
+                </div>
+            </div>
+            <div class="slide-number">9/10</div>
+        </div>
+
+        <!-- 第10页：应用价值 -->
+        <div class="slide" style="opacity: 1; transform: translateY(0px); transition: opacity 0.6s, transform 0.6s;">
+            <h1>💎 应用价值与实施效果</h1>
+            <h2 style="color: #64b5f6; font-size: 24px; margin-bottom: 40px; position: relative; z-index: 1;">从成本中心到价值引擎的战略性蜕变</h2>
+            
+            <h3 style="color: #4caf50; margin-bottom: 25px; position: relative; z-index: 1;">四大核心价值矩阵</h3>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>维度</th>
+                        <th>传统模式</th>
+                        <th>智能系统</th>
+                        <th>提升幅度</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>⚡ 管理效率</strong></td>
+                        <td>人工巡查响应7-15天</td>
+                        <td>实时自动预警</td>
+                        <td><span style="color: #4caf50; font-size: 18px; font-weight: bold;">↑ 70%</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>📋 案件处理</strong></td>
+                        <td>流程繁琐重复劳动</td>
+                        <td>标准化线上协同</td>
+                        <td><span style="color: #4caf50; font-size: 18px; font-weight: bold;">↑ 50%</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>💰 人力成本</strong></td>
+                        <td>大量线下巡查人员</td>
+                        <td>自动化工具替代</td>
+                        <td><span style="color: #4caf50; font-size: 18px; font-weight: bold;">↓ 40%</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>🎯 违规管控</strong></td>
+                        <td>震慑力弱重复率高</td>
+                        <td>快速发现严厉处罚</td>
+                        <td><span style="color: #4caf50; font-size: 18px; font-weight: bold;">↓ 60%</span></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3 style="color: #4caf50; margin: 40px 0 25px; position: relative; z-index: 1;">量化成果展示</h3>
+            <div class="achievement-grid">
+                <div class="achievement">
+                    <div class="achievement-icon">🏆</div>
+                    <div class="achievement-value">95%</div>
+                    <div class="stat-label">证据完整性</div>
+                    <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 5px;">从60%提升</div>
+                </div>
+                <div class="achievement">
+                    <div class="achievement-icon">🏆</div>
+                    <div class="achievement-value">87.5%</div>
+                    <div class="stat-label">结案率</div>
+                    <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 5px;">从65%提升</div>
+                </div>
+                <div class="achievement">
+                    <div class="achievement-icon">🏆</div>
+                    <div class="achievement-value">4.2天</div>
+                    <div class="stat-label">平均响应时间</div>
+                    <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 5px;">从10天缩短</div>
+                </div>
+                <div class="achievement">
+                    <div class="achievement-icon">🏆</div>
+                    <div class="achievement-value">5%</div>
+                    <div class="stat-label">重复违规率</div>
+                    <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 5px;">从18%下降</div>
+                </div>
+            </div>
+
+            <div class="vision-box">
+                <blockquote>
+                    让智能稽查成为企业高质量发展的新护城河
+                </blockquote>
+                <div class="vision-tags">
+                    <span class="vision-tag">捍卫市场秩序</span>
+                    <span class="vision-tag">保护核心利润</span>
+                    <span class="vision-tag">维护品牌价值</span>
+                    <span class="vision-tag">强化渠道控制</span>
+                </div>
+            </div>
+            <div class="slide-number">10/10</div>
+        </div>
+    </div>
+
+    <script>
+        function downloadHTML() {
+            const htmlContent = document.documentElement.outerHTML;
+            const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '医药市场稽查管理系统PPT-完整版.html';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            alert('PPT已下载！您可以：\n1. 在浏览器中打开查看\n2. 使用浏览器打印功能保存为PDF');
+        }
+
+        window.addEventListener('beforeprint', function() {
+            console.log('正在准备打印，建议设置：\n- 纸张大小：A4横向\n- 边距：无\n- 背景图形：启用');
+        });
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.style.opacity = '1';
+                    entry.target.style.transform = 'translateY(0)';
+                }
+            });
+        }, {
+            threshold: 0.1
+        });
+
+        document.querySelectorAll('.slide').forEach(slide => {
+            slide.style.opacity = '0';
+            slide.style.transform = 'translateY(20px)';
+            slide.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+            observer.observe(slide);
+        });
+    </script>
+
+</body><grammarly-desktop-integration data-grammarly-shadow-root="true"></grammarly-desktop-integration></html>
