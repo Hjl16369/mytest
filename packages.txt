@@ -1,2 +1,4 @@
-fonts-noto-cjk
-fonts-wqy-zenhei
+libgl1-mesa-glx
+  libglib2.0-0
+  fonts-noto-cjk
+  fonts-noto-cjk-extra
