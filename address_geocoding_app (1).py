@@ -8,7 +8,7 @@ from streamlit_folium import st_folium
 
 # 页面配置
 st.set_page_config(
-    page_title="客户地址经纬度转换工具",
+    page_title="正掌讯客户地址-经纬度转换系统V2.0",
     page_icon="🗺️",
     layout="wide"
 )
@@ -49,7 +49,7 @@ st.sidebar.info(
     - 客户名称
     - 省份
     - 城市
-    - 详细地址
+    - 客户地址
     """
 )
 
@@ -185,7 +185,7 @@ def process_addresses(df, api_key, map_service):
     
     for idx, row in df.iterrows():
         # 构建完整地址
-        full_address = f"{row['省份']}{row['城市']}{row['详细地址']}"
+        full_address = f"{row['省份']}{row['城市']}{row['客户地址']}"
         
         # 根据选择的地图服务调用相应API
         if map_service == "高德地图":
@@ -198,7 +198,7 @@ def process_addresses(df, api_key, map_service):
             "客户名称": row["客户名称"],
             "省份": row["省份"],
             "城市": row["城市"],
-            "详细地址": row["详细地址"],
+            "详细地址": row["客户地址"],
             "经度": lng if lng else "",
             "纬度": lat if lat else "",
             "转换状态": status
@@ -226,11 +226,11 @@ with col1:
     uploaded_file = st.file_uploader(
         "选择Excel文件 (.xlsx 或 .xls)",
         type=["xlsx", "xls"],
-        help="文件必须包含：客户名称、省份、城市、详细地址"
+        help="文件必须包含：客户名称、省份、城市、客户地址"
     )
 
 with col2:
-    st.subheader("📊 文件预览")
+ #   st.subheader("📊 文件预览")
 
 # 重置按钮
 if st.session_state.conversion_done:
@@ -246,7 +246,7 @@ if uploaded_file is not None and not st.session_state.conversion_done:
         df = pd.read_excel(uploaded_file)
         
         # 验证必需的列
-        required_columns = ["客户名称", "省份", "城市", "详细地址"]
+        required_columns = ["客户名称", "省份", "城市", "客户地址"]
         missing_columns = [col for col in required_columns if col not in df.columns]
         
         if missing_columns:
@@ -434,7 +434,7 @@ elif st.session_state.conversion_done and st.session_state.result_df is not None
         st.markdown("---")
         st.write("**失败记录明细：**")
         st.dataframe(
-            failed_df[["客户名称", "省份", "城市", "详细地址", "转换状态"]], 
+            failed_df[["客户名称", "省份", "城市", "客户地址", "转换状态"]], 
             use_container_width=True
         )
         
