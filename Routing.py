@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 import math
 import streamlit as st
 
-st.title("店铺配送路线优化系统")
-st.write("上传包含店铺地址信息的CSV文件，系统将自动优化配送路线")
+st.title("正掌讯OTC药店拜访路线优化系统6.0")
+st.write("上传包含药店地址信息的CSV文件，系统将自动优化配送路线")
 
 # File uploader
 uploaded_file = st.file_uploader("选择CSV文件", type=['csv'])
@@ -42,7 +42,7 @@ if uploaded_file is not None:
         # Drop any rows with missing coordinates
         df = df.dropna()
         
-        st.write(f"### 成功加载 {len(df)} 家店铺")
+        st.write(f"### 成功加载 {len(df)} 家药店")
         
         # Haversine Formula to calculate distance between two points on Earth
         def haversine_distance(lat1, lon1, lat2, lon2):
@@ -164,10 +164,10 @@ if uploaded_file is not None:
         st.pyplot(fig)
         
         # Show optimized route order
-        st.write("## 优化后的配送顺序")
+        st.write("## 优化后的巡店顺序")
         route_df = pd.DataFrame({
             '顺序': range(1, len(path_after_indices)),
-            '店铺名称': [df.iloc[idx]['Name'] for idx in path_after_indices[:-1]],
+            '药店名称': [df.iloc[idx]['Name'] for idx in path_after_indices[:-1]],
             '经度': [df.iloc[idx]['Longitude'] for idx in path_after_indices[:-1]],
             '纬度': [df.iloc[idx]['Latitude'] for idx in path_after_indices[:-1]]
         })
@@ -175,7 +175,7 @@ if uploaded_file is not None:
         
     except Exception as e:
         st.error(f"处理数据时出错: {str(e)}")
-        st.write("请确保CSV文件格式正确，第2列为店铺名称，第9列为经度，第10列为纬度")
+        st.write("请确保CSV文件格式正确，第2列为药店名称，第9列为经度，第10列为纬度")
         st.write("### 文件列信息:")
         st.write(f"文件共有 {len(data.columns)} 列")
         st.write(data.columns.tolist())
