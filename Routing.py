@@ -11,8 +11,24 @@ st.write("上传包含店铺地址信息的CSV文件，系统将自动优化配�
 uploaded_file = st.file_uploader("选择CSV文件", type=['csv'])
 
 if uploaded_file is not None:
-    # Load the dataset
-    data = pd.read_csv(uploaded_file)
+    # Try to load the dataset with different encodings
+    encodings = ['utf-8', 'gbk', 'gb2312', 'gb18030', 'latin1']
+    data = None
+    
+    for encoding in encodings:
+        try:
+            uploaded_file.seek(0)  # Reset file pointer
+            data = pd.read_csv(uploaded_file, encoding=encoding)
+            st.success(f"成功使用 {encoding} 编码读取文件")
+            break
+        except UnicodeDecodeError:
+            continue
+        except Exception as e:
+            continue
+    
+    if data is None:
+        st.error("无法读取文件，请检查文件编码格式")
+        st.stop()
     
     st.write("### 数据预览")
     st.write(data.head())
