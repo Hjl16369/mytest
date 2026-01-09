@@ -34,9 +34,9 @@ if uploaded_file is not None:
     st.write(data.head())
     
     # Extract relevant columns: Name, Longitude, Latitude
-    # Assuming columns at indices 1, 9, 10
+    # Column 1: Name (index 1), Column 9: Longitude (index 8), Column 10: Latitude (index 9)
     try:
-        df = data.iloc[:, [1, 9, 10]].copy()
+        df = data.iloc[:, [1, 8, 9]].copy()
         df.columns = ['Name', 'Longitude', 'Latitude']
         
         # Drop any rows with missing coordinates
@@ -175,6 +175,9 @@ if uploaded_file is not None:
         
     except Exception as e:
         st.error(f"处理数据时出错: {str(e)}")
-        st.write("请确保CSV文件格式正确，第2列为店铺名称，第10列为经度，第11列为纬度")
+        st.write("请确保CSV文件格式正确，第2列为店铺名称，第9列为经度，第10列为纬度")
+        st.write("### 文件列信息:")
+        st.write(f"文件共有 {len(data.columns)} 列")
+        st.write(data.columns.tolist())
 else:
     st.info("👆 请上传CSV文件开始优化路线")
