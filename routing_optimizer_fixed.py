@@ -412,8 +412,12 @@ if uploaded_file is not None:
         st.error(f"处理数据时出错: {str(e)}")
         st.write("请确保CSV文件格式正确，第2列为药店名称，第9列为经度，第10列为纬度")
         st.write("### 文件列信息:")
-        st.write(f"文件共有 {len(data.columns)} 列")
-        st.write(data.columns.tolist())
+        if 'data' in locals():
+            st.write(f"文件共有 {len(data.columns)} 列")
+            st.write(data.columns.tolist())
+
+else:
+    st.info("👆 请上传CSV文件开始优化路线")
 
 
 # PDF Report Generation Function
