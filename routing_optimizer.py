@@ -205,7 +205,7 @@ if uploaded_file is not None:
             p1 = (lons_a.iloc[i], lats_a.iloc[i])
             p2 = (lons_a.iloc[i+1], lats_a.iloc[i+1])
             ax2.annotate('', xy=p2, xytext=p1, 
-                        arrowprops=dict(arrowstyle="->', head_width=0.3, head_length=0.3", 
+                        arrowprops=dict(arrowstyle='->', 
                                       color='blue', lw=1.5, alpha=0.6))
         
         # Mark all intermediate points
