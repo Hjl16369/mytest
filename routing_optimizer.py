@@ -200,7 +200,7 @@ if uploaded_file is not None:
         # Draw path with gradient color
         ax2.plot(lons_a, lats_a, '-', color='blue', alpha=0.4, linewidth=2)
         
-        # Add arrows to show direction
+        # Add arrows to show direction (修复后的箭头代码)
         for i in range(len(path_after_indices) - 1):
             p1 = (lons_a.iloc[i], lats_a.iloc[i])
             p2 = (lons_a.iloc[i+1], lats_a.iloc[i+1])
