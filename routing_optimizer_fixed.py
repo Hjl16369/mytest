@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import streamlit as st
 from scipy.spatial.distance import cdist
+import matplotlib
+matplotlib.use('Agg')
 
 st.title("正掌讯药店巡店路线优化系统3.0")
 st.write("上传包含药店地址信息的CSV文件，系统将自动优化配送路线")
@@ -30,8 +32,9 @@ if uploaded_file is not None:
         st.error("无法读取文件，请检查文件编码格式")
         st.stop()
     
-    st.write("### 数据预览")
-    st.write(data.head())
+    # Display all customer information
+    st.write("### 数据预览 - 所有客户信息")
+    st.dataframe(data, use_container_width=True)
     
     # Extract relevant columns: Name, Longitude, Latitude
     try:
@@ -132,7 +135,7 @@ if uploaded_file is not None:
             return path
         
         # Smart starting point selection (sample strategy)
-        def select_candidate_starts(n_pharmacies, max_candidates=10):
+        def select_candidate_starts(n_pharmacies, max_candidates=20):
             """
             Select promising starting points instead of trying all
             Strategy: corners + center + random samples
@@ -209,7 +212,8 @@ if uploaded_file is not None:
             all_results.append({
                 'start_idx': start_idx,
                 'start_name': df.iloc[start_idx]['Name'],
-                'distance': distance
+                'distance': distance,
+                'path': path
             })
             
             if distance < best_distance:
@@ -226,38 +230,38 @@ if uploaded_file is not None:
         # Display results
         st.write("## 优化结果")
         
-        col1, col2, col3 = st.columns(3)
+        st.success(f"🎯 **最优起点**: {df.iloc[best_start_idx]['Name']} (原表格序号: {best_start_idx + 1})")
+        st.success(f"✅ **最优路径总长度**: {dist_after:.2f} km")
         
-        with col1:
-            st.metric("优化前单程路程", f"{dist_before:.2f} km")
-        
-        with col2:
-            st.metric("优化后单程路程", f"{dist_after:.2f} km")
-        
-        with col3:
-            savings_km = dist_before - dist_after
-            savings_percent = (savings_km / dist_before) * 100 if dist_before > 0 else 0
-            st.metric("节省路程", f"{savings_km:.2f} km", f"{savings_percent:.1f}%")
-        
-        st.info(f"🎯 **最优起点**: {df.iloc[best_start_idx]['Name']} (原序号: {best_start_idx + 1})")
-        
-        # Show tested starting points comparison
-        with st.expander(f"📊 查看测试的 {len(all_results)} 个起点的路径长度对比"):
+        # Show all tested starting points with their optimal distances
+        with st.expander(f"📊 查看测试的 {len(all_results)} 个起点的最短路径长度对比"):
+            st.write("**说明**: 每行显示以该药店为起点时计算出的最短路径距离，表中最小值即为全局最优方案")
             comparison_df = pd.DataFrame({
-                '原序号': [r['start_idx'] + 1 for r in all_results],
-                '起点药店': [r['start_name'] for r in all_results],
-                '路径长度 (km)': [f"{r['distance']:.2f}" for r in all_results],
-                '与最优差距 (km)': [f"{r['distance'] - best_distance:.2f}" for r in all_results]
+                '原表格序号': [r['start_idx'] + 1 for r in all_results],
+                '起点药店名称': [r['start_name'] for r in all_results],
+                '该起点的最短路径 (km)': [round(r['distance'], 2) for r in all_results],
+                '与全局最优差距 (km)': [round(r['distance'] - best_distance, 2) for r in all_results]
             })
-            comparison_df = comparison_df.sort_values('路径长度 (km)')
-            st.dataframe(comparison_df, use_container_width=True)
+            # Sort by distance
+            comparison_df = comparison_df.sort_values('该起点的最短路径 (km)')
+            # Highlight the best one
+            st.dataframe(
+                comparison_df.style.apply(
+                    lambda x: ['background-color: lightgreen' if x['该起点的最短路径 (km)'] == comparison_df['该起点的最短路径 (km)'].min() else '' for i in x],
+                    axis=1
+                ),
+                use_container_width=True
+            )
+            st.info(f"全局最优方案：以 **{df.iloc[best_start_idx]['Name']}** 为起点，总路程 **{best_distance:.2f} km**")
         
-        # Visualization
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+        # Visualization with Chinese font support
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
+        
+        # Configure Chinese font
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans', 'sans-serif']
         plt.rcParams['axes.unicode_minus'] = False
         
-        # Plot 1: Before
+        # Plot 1: Original order from uploaded table
         lons_b = df.iloc[path_before]['Longitude'].values
         lats_b = df.iloc[path_before]['Latitude'].values
         
@@ -272,13 +276,14 @@ if uploaded_file is not None:
                             fontsize=7, ha='center', va='center',
                             bbox=dict(boxstyle='circle,pad=0.3', facecolor='white', edgecolor='gray', alpha=0.7))
         
-        ax1.set_title(f"优化前 (原始顺序)\n单程路程: {dist_before:.2f} km", fontsize=12, fontweight='bold')
-        ax1.set_xlabel("经度", fontsize=10)
-        ax1.set_ylabel("纬度", fontsize=10)
-        ax1.legend(fontsize=10)
+        ax1.set_title(f"原始顺序路线图\n(按上传表格顺序)\n总路程: {dist_before:.2f} km", 
+                     fontsize=13, fontweight='bold', pad=15)
+        ax1.set_xlabel("经度", fontsize=11)
+        ax1.set_ylabel("纬度", fontsize=11)
+        ax1.legend(fontsize=10, loc='best')
         ax1.grid(True, linestyle='--', alpha=0.3)
         
-        # Plot 2: After
+        # Plot 2: Optimized path
         lons_a = df.iloc[path_after]['Longitude'].values
         lats_a = df.iloc[path_after]['Latitude'].values
         
@@ -297,12 +302,16 @@ if uploaded_file is not None:
             ax2.scatter(lons_a[1:-1], lats_a[1:-1], 
                        c='dodgerblue', s=80, alpha=0.8, edgecolors='white', linewidth=1.5, zorder=5)
         
+        # Get start and end pharmacy names
+        start_name = df.iloc[path_after[0]]['Name']
+        end_name = df.iloc[path_after[-1]]['Name']
+        
         ax2.plot(lons_a[0], lats_a[0], 'g*', markersize=22, 
-                label=f'起点: {df.iloc[path_after[0]]["Name"]}', zorder=10, 
+                label=f'起点: {start_name}', zorder=10, 
                 markeredgecolor='darkgreen', markeredgewidth=1.5)
         
         ax2.plot(lons_a[-1], lats_a[-1], 'r*', markersize=22, 
-                label=f'终点: {df.iloc[path_after[-1]]["Name"]}', zorder=10, 
+                label=f'终点: {end_name}', zorder=10, 
                 markeredgecolor='darkred', markeredgewidth=1.5)
         
         # Only show numbers if not too many pharmacies
@@ -312,11 +321,12 @@ if uploaded_file is not None:
                         fontsize=8, color='white', weight='bold', ha='center', va='center',
                         bbox=dict(boxstyle='circle,pad=0.25', facecolor='navy', alpha=0.7), zorder=6)
         
-        ax2.set_title(f"优化后 (全局最优路径)\n单程路程: {dist_after:.2f} km (节省 {savings_percent:.1f}%)", 
-                     fontsize=12, fontweight='bold', color='darkblue')
-        ax2.set_xlabel("经度", fontsize=10)
-        ax2.set_ylabel("纬度", fontsize=10)
-        ax2.legend(fontsize=9, loc='best')
+        savings_percent = ((dist_before - dist_after) / dist_before * 100) if dist_before > 0 else 0
+        ax2.set_title(f"优化后最优路线图\n(全局最优方案)\n总路程: {dist_after:.2f} km (节省 {savings_percent:.1f}%)", 
+                     fontsize=13, fontweight='bold', color='darkblue', pad=15)
+        ax2.set_xlabel("经度", fontsize=11)
+        ax2.set_ylabel("纬度", fontsize=11)
+        ax2.legend(fontsize=9, loc='best', framealpha=0.9)
         ax2.grid(True, linestyle='--', alpha=0.3)
         
         plt.tight_layout()
@@ -325,9 +335,9 @@ if uploaded_file is not None:
         # Show optimized route
         st.write("## 全局最优巡店顺序")
         route_df = pd.DataFrame({
-            '顺序': range(1, len(path_after) + 1),
+            '巡店顺序': range(1, len(path_after) + 1),
             '药店名称': [df.iloc[idx]['Name'] for idx in path_after],
-            '原序号': [idx + 1 for idx in path_after],
+            '原表格序号': [idx + 1 for idx in path_after],
             '经度': [f"{df.iloc[idx]['Longitude']:.6f}" for idx in path_after],
             '纬度': [f"{df.iloc[idx]['Latitude']:.6f}" for idx in path_after]
         })
