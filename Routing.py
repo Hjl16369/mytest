@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import math
 import streamlit as st
 
-st.title("正掌讯OTC药店拜访路线优化系统6.0")
+st.title("正掌讯药店巡店路线优化系统3.0")
 st.write("上传包含药店地址信息的CSV文件，系统将自动优化配送路线")
 
 # File uploader
