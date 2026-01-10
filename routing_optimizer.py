@@ -69,12 +69,12 @@ if uploaded_file is not None:
                 )
             return total_dist
         
-        # 2-opt optimization algorithm
+        # 2-opt optimization algorithm for open path (no return to start)
         def two_opt_optimization(path_indices, df, max_iterations=1000):
             """
-            2-opt algorithm: iteratively removes crossing edges to reduce total distance
+            2-opt algorithm optimized for open paths (start to end, no loop back)
             """
-            path = path_indices[:-1]  # Remove the return-to-start node
+            path = list(path_indices)
             improved = True
             iteration = 0
             
@@ -82,39 +82,61 @@ if uploaded_file is not None:
                 improved = False
                 iteration += 1
                 
-                for i in range(1, len(path) - 1):
-                    for j in range(i + 1, len(path)):
-                        # Calculate current distance
-                        current_dist = (
-                            haversine_distance(
-                                df.iloc[path[i-1]]['Latitude'], df.iloc[path[i-1]]['Longitude'],
-                                df.iloc[path[i]]['Latitude'], df.iloc[path[i]]['Longitude']
-                            ) +
-                            haversine_distance(
-                                df.iloc[path[j]]['Latitude'], df.iloc[path[j]]['Longitude'],
-                                df.iloc[path[(j+1) % len(path)]]['Latitude'], df.iloc[path[(j+1) % len(path)]]['Longitude']
+                for i in range(len(path) - 2):
+                    for j in range(i + 2, len(path)):
+                        # For open path, we check if reversing path[i+1:j+1] improves distance
+                        if j == len(path) - 1:
+                            # Special case: reversing to the end
+                            current_dist = (
+                                haversine_distance(
+                                    df.iloc[path[i]]['Latitude'], df.iloc[path[i]]['Longitude'],
+                                    df.iloc[path[i+1]]['Latitude'], df.iloc[path[i+1]]['Longitude']
+                                ) +
+                                haversine_distance(
+                                    df.iloc[path[j-1]]['Latitude'], df.iloc[path[j-1]]['Longitude'],
+                                    df.iloc[path[j]]['Latitude'], df.iloc[path[j]]['Longitude']
+                                )
                             )
-                        )
-                        
-                        # Calculate new distance after swap
-                        new_dist = (
-                            haversine_distance(
-                                df.iloc[path[i-1]]['Latitude'], df.iloc[path[i-1]]['Longitude'],
-                                df.iloc[path[j]]['Latitude'], df.iloc[path[j]]['Longitude']
-                            ) +
-                            haversine_distance(
-                                df.iloc[path[i]]['Latitude'], df.iloc[path[i]]['Longitude'],
-                                df.iloc[path[(j+1) % len(path)]]['Latitude'], df.iloc[path[(j+1) % len(path)]]['Longitude']
+                            
+                            new_dist = (
+                                haversine_distance(
+                                    df.iloc[path[i]]['Latitude'], df.iloc[path[i]]['Longitude'],
+                                    df.iloc[path[j]]['Latitude'], df.iloc[path[j]]['Longitude']
+                                ) +
+                                haversine_distance(
+                                    df.iloc[path[i+1]]['Latitude'], df.iloc[path[i+1]]['Longitude'],
+                                    df.iloc[path[j-1]]['Latitude'], df.iloc[path[j-1]]['Longitude']
+                                )
                             )
-                        )
+                        else:
+                            # Normal case: reversing middle segment
+                            current_dist = (
+                                haversine_distance(
+                                    df.iloc[path[i]]['Latitude'], df.iloc[path[i]]['Longitude'],
+                                    df.iloc[path[i+1]]['Latitude'], df.iloc[path[i+1]]['Longitude']
+                                ) +
+                                haversine_distance(
+                                    df.iloc[path[j]]['Latitude'], df.iloc[path[j]]['Longitude'],
+                                    df.iloc[path[j+1]]['Latitude'], df.iloc[path[j+1]]['Longitude']
+                                )
+                            )
+                            
+                            new_dist = (
+                                haversine_distance(
+                                    df.iloc[path[i]]['Latitude'], df.iloc[path[i]]['Longitude'],
+                                    df.iloc[path[j]]['Latitude'], df.iloc[path[j]]['Longitude']
+                                ) +
+                                haversine_distance(
+                                    df.iloc[path[i+1]]['Latitude'], df.iloc[path[i+1]]['Longitude'],
+                                    df.iloc[path[j+1]]['Latitude'], df.iloc[path[j+1]]['Longitude']
+                                )
+                            )
                         
                         # If improvement found, reverse the segment
                         if new_dist < current_dist:
-                            path[i:j+1] = reversed(path[i:j+1])
+                            path[i+1:j+1] = reversed(path[i+1:j+1])
                             improved = True
             
-            # Add return to start
-            path.append(path[0])
             return path
         
         # Scenario A: Original Order (The "Before")
