@@ -259,8 +259,31 @@ if uploaded_file is not None:
         # Visualization with Chinese font support
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
         
-        # Configure Chinese font
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans', 'sans-serif']
+        # Configure Chinese font - try multiple methods for better compatibility
+        try:
+            # Method 1: Try system fonts
+            from matplotlib import font_manager
+            
+            # List of Chinese fonts to try
+            chinese_fonts = ['SimHei', 'Microsoft YaHei', 'STHeiti', 'Arial Unicode MS', 
+                           'WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'Source Han Sans CN']
+            
+            available_fonts = [f.name for f in font_manager.fontManager.ttflist]
+            
+            font_found = False
+            for font_name in chinese_fonts:
+                if font_name in available_fonts:
+                    plt.rcParams['font.sans-serif'] = [font_name]
+                    font_found = True
+                    break
+            
+            if not font_found:
+                # Method 2: Use DejaVu Sans and warn user
+                plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+                st.warning("未检测到中文字体，图表中的中文可能显示为方框。这不影响数据的正确性。")
+        except:
+            plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+        
         plt.rcParams['axes.unicode_minus'] = False
         
         # Plot 1: Original order from uploaded table
@@ -268,8 +291,8 @@ if uploaded_file is not None:
         lats_b = df.iloc[path_before]['Latitude'].values
         
         ax1.plot(lons_b, lats_b, 'o-', color='gray', alpha=0.5, markersize=6, linewidth=1.5)
-        ax1.plot(lons_b[0], lats_b[0], 'g*', markersize=18, label='起点', zorder=10)
-        ax1.plot(lons_b[-1], lats_b[-1], 'r*', markersize=18, label='终点', zorder=10)
+        ax1.plot(lons_b[0], lats_b[0], 'g*', markersize=18, label='Start Point', zorder=10)
+        ax1.plot(lons_b[-1], lats_b[-1], 'r*', markersize=18, label='End Point', zorder=10)
         
         # Only show numbers if not too many pharmacies
         if len(df) <= 30:
@@ -278,10 +301,10 @@ if uploaded_file is not None:
                             fontsize=7, ha='center', va='center',
                             bbox=dict(boxstyle='circle,pad=0.3', facecolor='white', edgecolor='gray', alpha=0.7))
         
-        ax1.set_title(f"原始顺序路线图\n(按上传表格顺序)\n总路程: {abs(dist_before):.2f} km", 
+        ax1.set_title(f"Original Order Route\n(Table Upload Sequence)\nTotal Distance: {abs(dist_before):.2f} km", 
                      fontsize=13, fontweight='bold', pad=15)
-        ax1.set_xlabel("经度", fontsize=11)
-        ax1.set_ylabel("纬度", fontsize=11)
+        ax1.set_xlabel("Longitude", fontsize=11)
+        ax1.set_ylabel("Latitude", fontsize=11)
         ax1.legend(fontsize=10, loc='best')
         ax1.grid(True, linestyle='--', alpha=0.3)
         
@@ -309,11 +332,11 @@ if uploaded_file is not None:
         end_name = df.iloc[path_after[-1]]['Name']
         
         ax2.plot(lons_a[0], lats_a[0], 'g*', markersize=22, 
-                label=f'起点: {start_name}', zorder=10, 
+                label=f'Start: {start_name}', zorder=10, 
                 markeredgecolor='darkgreen', markeredgewidth=1.5)
         
         ax2.plot(lons_a[-1], lats_a[-1], 'r*', markersize=22, 
-                label=f'终点: {end_name}', zorder=10, 
+                label=f'End: {end_name}', zorder=10, 
                 markeredgecolor='darkred', markeredgewidth=1.5)
         
         # Only show numbers if not too many pharmacies
@@ -324,10 +347,10 @@ if uploaded_file is not None:
                         bbox=dict(boxstyle='circle,pad=0.25', facecolor='navy', alpha=0.7), zorder=6)
         
         savings_percent = ((abs(dist_before) - abs(dist_after)) / abs(dist_before) * 100) if dist_before > 0 else 0
-        ax2.set_title(f"优化后最优路线图\n(全局最优方案)\n总路程: {abs(dist_after):.2f} km (节省 {savings_percent:.1f}%)", 
+        ax2.set_title(f"Optimized Route\n(Global Best Solution)\nTotal Distance: {abs(dist_after):.2f} km (Save {savings_percent:.1f}%)", 
                      fontsize=13, fontweight='bold', color='darkblue', pad=15)
-        ax2.set_xlabel("经度", fontsize=11)
-        ax2.set_ylabel("纬度", fontsize=11)
+        ax2.set_xlabel("Longitude", fontsize=11)
+        ax2.set_ylabel("Latitude", fontsize=11)
         ax2.legend(fontsize=9, loc='best', framealpha=0.9)
         ax2.grid(True, linestyle='--', alpha=0.3)
         
