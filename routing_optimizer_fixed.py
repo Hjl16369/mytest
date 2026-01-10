@@ -709,5 +709,3 @@ def generate_pdf_report(df, data, path_before, path_after, dist_before, dist_aft
     
     buffer.seek(0)
     return buffer
-else:
-    st.info("👆 请上传CSV文件开始优化路线")
