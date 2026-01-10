@@ -5,6 +5,9 @@ import streamlit as st
 from scipy.spatial.distance import cdist
 import matplotlib
 matplotlib.use('Agg')
+from matplotlib.backends.backend_pdf import PdfPages
+from datetime import datetime
+import io
 
 st.title("正掌讯药店巡店路线优化系统3.0")
 st.write("上传包含药店地址信息的CSV文件，系统将自动优化配送路线")
@@ -368,14 +371,42 @@ if uploaded_file is not None:
         })
         st.dataframe(route_df, use_container_width=True)
         
-        # Download
+        # Download option for route table
         csv = route_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
-        st.download_button(
-            label="📥 下载全局最优路线表",
-            data=csv,
-            file_name="全局最优路线.csv",
-            mime="text/csv",
-        )
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.download_button(
+                label="📥 下载全局最优路线表 (CSV)",
+                data=csv,
+                file_name="全局最优路线.csv",
+                mime="text/csv",
+            )
+        
+        with col2:
+            # Generate PDF Report
+            if st.button("📄 生成并下载专业PDF报告", type="primary"):
+                with st.spinner('正在生成PDF报告...'):
+                    pdf_buffer = generate_pdf_report(
+                        df=df,
+                        data=data,
+                        path_before=path_before,
+                        path_after=path_after,
+                        dist_before=abs(dist_before),
+                        dist_after=abs(dist_after),
+                        best_start_idx=best_start_idx,
+                        route_df=route_df,
+                        dist_matrix=dist_matrix
+                    )
+                    
+                    st.download_button(
+                        label="⬇️ 下载PDF报告",
+                        data=pdf_buffer,
+                        file_name=f"正掌讯药店巡店路线优化报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                    )
+                    st.success("✅ PDF报告生成成功！")
         
     except Exception as e:
         st.error(f"处理数据时出错: {str(e)}")
@@ -383,5 +414,296 @@ if uploaded_file is not None:
         st.write("### 文件列信息:")
         st.write(f"文件共有 {len(data.columns)} 列")
         st.write(data.columns.tolist())
+
+
+# PDF Report Generation Function
+def generate_pdf_report(df, data, path_before, path_after, dist_before, dist_after, 
+                       best_start_idx, route_df, dist_matrix):
+    """
+    Generate a professional PDF report for route optimization
+    """
+    buffer = io.BytesIO()
+    
+    # Create PDF with multiple pages
+    with PdfPages(buffer) as pdf:
+        # Configure font for the entire PDF
+        plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+        plt.rcParams['axes.unicode_minus'] = False
+        
+        # PAGE 1: Title Page
+        fig = plt.figure(figsize=(11, 8.5))
+        fig.patch.set_facecolor('white')
+        ax = fig.add_subplot(111)
+        ax.axis('off')
+        
+        # Add decorative border
+        from matplotlib.patches import Rectangle
+        border = Rectangle((0.05, 0.05), 0.9, 0.9, fill=False, 
+                          edgecolor='#2C5F8D', linewidth=3, transform=fig.transFigure)
+        fig.patches.append(border)
+        
+        # Title
+        ax.text(0.5, 0.75, 'Pharmacy Route Optimization Report', 
+               ha='center', va='center', fontsize=28, fontweight='bold', 
+               color='#2C5F8D', transform=fig.transFigure)
+        
+        ax.text(0.5, 0.68, 'Zhengzhangxun Pharmacy Inspection Route Analysis',
+               ha='center', va='center', fontsize=16, color='#555555',
+               transform=fig.transFigure)
+        
+        # Add a decorative line
+        ax.plot([0.2, 0.8], [0.63, 0.63], 'k-', lw=2, transform=fig.transFigure)
+        
+        # Report details
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        ax.text(0.5, 0.50, f'Report Generation Time: {current_time}',
+               ha='center', va='center', fontsize=12, color='#333333',
+               transform=fig.transFigure)
+        
+        ax.text(0.5, 0.45, f'Total Pharmacies: {len(df)}',
+               ha='center', va='center', fontsize=12, color='#333333',
+               transform=fig.transFigure)
+        
+        ax.text(0.5, 0.40, f'Optimal Starting Point: {df.iloc[best_start_idx]["Name"]}',
+               ha='center', va='center', fontsize=12, color='#333333',
+               transform=fig.transFigure)
+        
+        # Optimization results box
+        results_text = f"""
+        Optimization Results
+        
+        Original Route Distance: {dist_before:.2f} km
+        Optimized Route Distance: {dist_after:.2f} km
+        Distance Saved: {dist_before - dist_after:.2f} km
+        Improvement: {((dist_before - dist_after) / dist_before * 100):.1f}%
+        """
+        
+        ax.text(0.5, 0.25, results_text,
+               ha='center', va='center', fontsize=11, color='#1a5490',
+               bbox=dict(boxstyle='round,pad=1', facecolor='#E8F4F8', 
+                        edgecolor='#2C5F8D', linewidth=2),
+               transform=fig.transFigure, family='monospace')
+        
+        # Footer
+        ax.text(0.5, 0.08, 'Issued by:',
+               ha='center', va='center', fontsize=10, color='#666666',
+               transform=fig.transFigure)
+        
+        ax.text(0.5, 0.04, "Xi'an Zhengxun Software Co., Ltd.",
+               ha='center', va='center', fontsize=14, fontweight='bold',
+               color='#2C5F8D', transform=fig.transFigure)
+        
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close(fig)
+        
+        # PAGE 2: Pharmacy List Table
+        fig = plt.figure(figsize=(11, 8.5))
+        fig.patch.set_facecolor('white')
+        ax = fig.add_subplot(111)
+        ax.axis('off')
+        
+        # Page title
+        ax.text(0.5, 0.95, 'Pharmacy List to be Optimized',
+               ha='center', va='top', fontsize=18, fontweight='bold',
+               color='#2C5F8D', transform=fig.transFigure)
+        
+        # Create table data - show first 30 pharmacies to fit on one page
+        display_df = df.head(30).copy()
+        display_df.insert(0, 'No.', range(1, len(display_df) + 1))
+        
+        table_data = [display_df.columns.tolist()] + display_df.values.tolist()
+        
+        # Create table
+        table = ax.table(cellText=table_data, cellLoc='left',
+                        bbox=[0.1, 0.1, 0.8, 0.80],
+                        colWidths=[0.1, 0.5, 0.2, 0.2])
+        
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        
+        # Style header row
+        for i in range(len(display_df.columns)):
+            cell = table[(0, i)]
+            cell.set_facecolor('#2C5F8D')
+            cell.set_text_props(weight='bold', color='white')
+            cell.set_height(0.03)
+        
+        # Style data rows with alternating colors
+        for i in range(1, len(table_data)):
+            for j in range(len(display_df.columns)):
+                cell = table[(i, j)]
+                if i % 2 == 0:
+                    cell.set_facecolor('#F0F0F0')
+                cell.set_height(0.025)
+        
+        # Add note if there are more pharmacies
+        if len(df) > 30:
+            ax.text(0.5, 0.05, f'Note: Showing first 30 of {len(df)} pharmacies',
+                   ha='center', va='center', fontsize=10, style='italic',
+                   color='#666666', transform=fig.transFigure)
+        
+        # Footer
+        ax.text(0.95, 0.02, "Xi'an Zhengxun Software Co., Ltd.",
+               ha='right', va='bottom', fontsize=8, color='#999999',
+               transform=fig.transFigure)
+        
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close(fig)
+        
+        # PAGE 3: Route Comparison Maps
+        fig = plt.figure(figsize=(11, 8.5))
+        fig.patch.set_facecolor('white')
+        
+        # Main title
+        fig.text(0.5, 0.96, 'Route Optimization Comparison',
+                ha='center', va='top', fontsize=18, fontweight='bold', color='#2C5F8D')
+        
+        # Create two subplots
+        ax1 = plt.subplot(1, 2, 1)
+        ax2 = plt.subplot(1, 2, 2)
+        
+        # Plot 1: Original Route
+        lons_b = df.iloc[path_before]['Longitude'].values
+        lats_b = df.iloc[path_before]['Latitude'].values
+        
+        ax1.plot(lons_b, lats_b, 'o-', color='gray', alpha=0.5, markersize=5, linewidth=1.5)
+        ax1.plot(lons_b[0], lats_b[0], 'g*', markersize=15, label='Start', zorder=10)
+        ax1.plot(lons_b[-1], lats_b[-1], 'r*', markersize=15, label='End', zorder=10)
+        
+        if len(df) <= 25:
+            for i in range(len(path_before)):
+                ax1.annotate(str(i+1), (lons_b[i], lats_b[i]), 
+                           fontsize=6, ha='center', va='center',
+                           bbox=dict(boxstyle='circle,pad=0.2', facecolor='white', 
+                                   edgecolor='gray', alpha=0.7))
+        
+        ax1.set_title(f'Original Route\nDistance: {dist_before:.2f} km', 
+                     fontsize=11, fontweight='bold', pad=10)
+        ax1.set_xlabel('Longitude', fontsize=9)
+        ax1.set_ylabel('Latitude', fontsize=9)
+        ax1.legend(fontsize=8, loc='best')
+        ax1.grid(True, linestyle='--', alpha=0.3)
+        
+        # Plot 2: Optimized Route
+        lons_a = df.iloc[path_after]['Longitude'].values
+        lats_a = df.iloc[path_after]['Latitude'].values
+        
+        ax2.plot(lons_a, lats_a, '-', color='blue', alpha=0.4, linewidth=2)
+        
+        arrow_step = max(1, len(path_after) // 15)
+        for i in range(0, len(path_after) - 1, arrow_step):
+            ax2.annotate('', xy=(lons_a[i+1], lats_a[i+1]), 
+                        xytext=(lons_a[i], lats_a[i]),
+                        arrowprops=dict(arrowstyle='->', color='blue', lw=1.2, alpha=0.6))
+        
+        if len(path_after) > 2:
+            ax2.scatter(lons_a[1:-1], lats_a[1:-1], 
+                       c='dodgerblue', s=60, alpha=0.8, edgecolors='white', 
+                       linewidth=1.2, zorder=5)
+        
+        ax2.plot(lons_a[0], lats_a[0], 'g*', markersize=18, 
+                label=f'Start: {df.iloc[path_after[0]]["Name"][:10]}...', 
+                zorder=10, markeredgecolor='darkgreen', markeredgewidth=1.2)
+        
+        ax2.plot(lons_a[-1], lats_a[-1], 'r*', markersize=18, 
+                label=f'End: {df.iloc[path_after[-1]]["Name"][:10]}...', 
+                zorder=10, markeredgecolor='darkred', markeredgewidth=1.2)
+        
+        if len(df) <= 25:
+            for i in range(len(path_after)):
+                ax2.text(lons_a[i], lats_a[i], str(i+1), 
+                        fontsize=6, color='white', weight='bold', 
+                        ha='center', va='center',
+                        bbox=dict(boxstyle='circle,pad=0.2', facecolor='navy', alpha=0.7), 
+                        zorder=6)
+        
+        savings_percent = ((dist_before - dist_after) / dist_before * 100) if dist_before > 0 else 0
+        ax2.set_title(f'Optimized Route\nDistance: {dist_after:.2f} km (Save {savings_percent:.1f}%)', 
+                     fontsize=11, fontweight='bold', color='darkblue', pad=10)
+        ax2.set_xlabel('Longitude', fontsize=9)
+        ax2.set_ylabel('Latitude', fontsize=9)
+        ax2.legend(fontsize=7, loc='best', framealpha=0.9)
+        ax2.grid(True, linestyle='--', alpha=0.3)
+        
+        plt.tight_layout(rect=[0, 0.02, 1, 0.94])
+        
+        # Footer
+        fig.text(0.95, 0.01, "Xi'an Zhengxun Software Co., Ltd.",
+                ha='right', va='bottom', fontsize=8, color='#999999')
+        
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close(fig)
+        
+        # PAGE 4: Optimized Route Table
+        fig = plt.figure(figsize=(11, 8.5))
+        fig.patch.set_facecolor('white')
+        ax = fig.add_subplot(111)
+        ax.axis('off')
+        
+        # Page title
+        ax.text(0.5, 0.95, 'Optimized Pharmacy Visit Sequence',
+               ha='center', va='top', fontsize=18, fontweight='bold',
+               color='#2C5F8D', transform=fig.transFigure)
+        
+        # Subtitle with key info
+        ax.text(0.5, 0.90, f'Starting Point: {df.iloc[best_start_idx]["Name"]} | Total Distance: {dist_after:.2f} km',
+               ha='center', va='top', fontsize=12, color='#555555',
+               transform=fig.transFigure)
+        
+        # Create table - show first 30 entries
+        display_route = route_df.head(30).copy()
+        table_data = [display_route.columns.tolist()] + display_route.values.tolist()
+        
+        # Create table
+        table = ax.table(cellText=table_data, cellLoc='left',
+                        bbox=[0.08, 0.08, 0.84, 0.78])
+        
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        
+        # Style header
+        for i in range(len(display_route.columns)):
+            cell = table[(0, i)]
+            cell.set_facecolor('#2C5F8D')
+            cell.set_text_props(weight='bold', color='white')
+            cell.set_height(0.03)
+        
+        # Style rows
+        for i in range(1, len(table_data)):
+            for j in range(len(display_route.columns)):
+                cell = table[(i, j)]
+                if i == 1:  # Highlight first pharmacy
+                    cell.set_facecolor('#C6E5C6')
+                elif i == len(table_data) - 1 and len(display_route) == len(route_df):  # Last
+                    cell.set_facecolor('#F5C6C6')
+                elif i % 2 == 0:
+                    cell.set_facecolor('#F0F0F0')
+                cell.set_height(0.025)
+        
+        # Add note if truncated
+        if len(route_df) > 30:
+            ax.text(0.5, 0.04, f'Note: Showing first 30 of {len(route_df)} pharmacies in sequence',
+                   ha='center', va='center', fontsize=10, style='italic',
+                   color='#666666', transform=fig.transFigure)
+        
+        # Footer
+        ax.text(0.95, 0.01, "Xi'an Zhengxun Software Co., Ltd.",
+               ha='right', va='bottom', fontsize=8, color='#999999',
+               transform=fig.transFigure)
+        
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close(fig)
+        
+        # Set PDF metadata
+        d = pdf.infodict()
+        d['Title'] = 'Pharmacy Route Optimization Report'
+        d['Author'] = "Xi'an Zhengxun Software Co., Ltd."
+        d['Subject'] = 'Route Optimization Analysis'
+        d['Keywords'] = 'Pharmacy, Route Optimization, Zhengzhangxun'
+        d['CreationDate'] = datetime.now()
+    
+    buffer.seek(0)
+    return buffer
 else:
     st.info("👆 请上传CSV文件开始优化路线")
