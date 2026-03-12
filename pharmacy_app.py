@@ -653,7 +653,8 @@ if submit:
     if not pharmacy_name.strip():  missing.append("目标药店名称")
     if not target_drug.strip():    missing.append("被评估药品名称")
     if missing:
-        st.error(f"⚠️ 以下必填项尚未填写：{'、'.join(missing)}")
+        missing_str = "、".join(missing)
+        st.error(f"⚠️ 以下必填项尚未填写：{missing_str}")
         st.stop()
 
     sc  = calc()
