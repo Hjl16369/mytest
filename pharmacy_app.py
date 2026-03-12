@@ -489,43 +489,48 @@ def make_pdf(sc, lvl_tuple) -> bytes:
         y = irow(lbl, val, y)
     y -= 6
 
-    # ── 综合得分 + 四维格：横向双栏，协调布局 ──────────────
-    BOX_H  = 80
-    LEFT_W = 150
-    GAP    = 6
+    # ── 综合得分（左） + 四维格（右）横向双栏 ──────────────
+    # 整体高度 80pt，左栏宽 150pt，右侧 2×2 网格
+    BOX_H  = 80          # 整体区块高度
+    LEFT_W = 150         # 左侧得分卡宽度
+    GAP    = 6           # 左右间距
 
     # 左侧：综合得分卡
     p.setFillColorRGB(0.086, 0.282, 0.753)
     p.roundRect(22, y - BOX_H, LEFT_W, BOX_H, 7, fill=1, stroke=0)
-    draw_cn_c(22 + LEFT_W/2, y - 14, "综合潜力得分", CF, 9,  (1, 1, 1))
-    draw_cn_c(22 + LEFT_W/2, y - 38, str(sc['total']), CFB, 30, (1, 1, 1))
-    draw_cn_c(22 + LEFT_W/2, y - 54, level,  CF, 9,  (1, 1, 0.75))
-    draw_cn_c(22 + LEFT_W/2, y - 68, prio.replace("⭐","★")[:10], CF, 7, (1, 0.9, 0.6))
+    draw_cn_c(22 + LEFT_W/2, y - 13, "综合潜力得分",         CF,  9,  (1, 1, 1))
+    draw_cn_c(22 + LEFT_W/2, y - 36, str(sc["total"]),       CFB, 28, (1, 1, 1))
+    draw_cn_c(22 + LEFT_W/2, y - 52, level,                  CF,  9,  (1, 1, 0.75))
+    draw_cn_c(22 + LEFT_W/2, y - 66, prio.replace("⭐","★"), CF,  7,  (1, 0.9, 0.6))
 
-    # 右侧：四维格（2×2 网格）
+    # 右侧：四维格 2×2，三行文字各自垂直均匀分布
     right_x = 22 + LEFT_W + GAP
     right_w = W - 44 - LEFT_W - GAP
-    cell_w  = (right_w - 4) / 2
-    cell_h  = (BOX_H - 4) / 2
+    cell_w  = (right_w - 4) / 2    # 列宽（两列，中间留 4pt 间距）
+    cell_h  = (BOX_H  - 4) / 2    # 行高（两行，中间留 4pt 间距）
+
     dims = [
-        ("需求潜力", str(sc['s_demand']), "权重 45%", (0.086, 0.282, 0.753)),
-        ("增长潜力", str(sc['s_growth']), "权重 25%", (0.0,   0.537, 0.482)),
-        ("竞争推荐", str(sc['s_comp']),   "权重 20%", (0.961, 0.49,  0.0  )),
-        ("基础实力", str(sc['s_basic']),  "权重 10%", (0.557, 0.141, 0.667)),
+        ("需求潜力", str(sc["s_demand"]), "权重 45%", (0.086, 0.282, 0.753)),
+        ("增长潜力", str(sc["s_growth"]), "权重 25%", (0.0,   0.537, 0.482)),
+        ("竞争推荐", str(sc["s_comp"]),   "权重 20%", (0.961, 0.490, 0.0  )),
+        ("基础实力", str(sc["s_basic"]),  "权重 10%", (0.557, 0.141, 0.667)),
     ]
+    # 左上、右上、左下、右下
     positions = [
         (right_x,              y - cell_h),
         (right_x + cell_w + 4, y - cell_h),
-        (right_x,              y - BOX_H),
-        (right_x + cell_w + 4, y - BOX_H),
+        (right_x,              y - BOX_H ),
+        (right_x + cell_w + 4, y - BOX_H ),
     ]
     for (bx, by), (dname, dval, dwt, col) in zip(positions, dims):
+        ch = cell_h - 2                  # 格子实际高度
         p.setFillColorRGB(*col)
-        p.roundRect(bx, by, cell_w, cell_h - 2, 5, fill=1, stroke=0)
+        p.roundRect(bx, by, cell_w, ch, 5, fill=1, stroke=0)
         cx = bx + cell_w / 2
-        draw_cn_c(cx, by + cell_h - 14, dname, CF,  8,  (1, 1, 1))
-        draw_cn_c(cx, by + cell_h - 30, dval,  CFB, 16, (1, 1, 1))
-        draw_cn_c(cx, by + 4,           dwt,   CF,  7,  (1, 1, 1))
+        # 三行文字：标题 / 数值 / 权重，间距均匀
+        draw_cn_c(cx, by + ch - 13, dname, CF,  8,  (1, 1, 1))   # 顶部：维度名
+        draw_cn_c(cx, by + ch/2 - 6, dval, CF,  13, (1, 1, 1))   # 中部：分值（13pt）
+        draw_cn_c(cx, by + 4,        dwt,  CF,  7,  (1, 1, 1))   # 底部：权重
 
     y -= BOX_H + 10
 
