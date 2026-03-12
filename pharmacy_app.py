@@ -1,12 +1,65 @@
 import streamlit as st
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-import io, smtplib, ssl
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import io, smtplib, ssl, os, tempfile
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+
+# ══════════════════════════════════════════════════════
+# 中文字体加载（兼容本地 & Streamlit Cloud）
+# ══════════════════════════════════════════════════════
+@st.cache_resource(show_spinner="正在加载中文字体，请稍候…")
+def _load_chinese_font() -> str:
+    """
+    返回已注册到 ReportLab 的中文字体名称。
+    优先查找系统字体，找不到则从 Google Fonts CDN 下载 NotoSansSC。
+    """
+    font_name = "NotoSansSC"
+    # 常见系统路径（Linux / macOS / Windows）
+    candidates = [
+        # Linux: fonts-noto-cjk 安装路径
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        # macOS
+        "/Library/Fonts/NotoSansCJK-Regular.ttc",
+        # Windows
+        "C:/Windows/Fonts/NotoSansSC-Regular.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont(font_name, path))
+                return font_name
+            except Exception:
+                continue
+
+    # 未找到系统字体，下载 NotoSansSC-Regular.ttf（约 8 MB）
+    import urllib.request
+    font_url = (
+        "https://github.com/googlefonts/noto-cjk/raw/main/Sans/SubsetOTF/"
+        "SC/NotoSansSC-Regular.otf"
+    )
+    tmp_dir  = tempfile.gettempdir()
+    tmp_path = os.path.join(tmp_dir, "NotoSansSC-Regular.otf")
+    if not os.path.exists(tmp_path):
+        urllib.request.urlretrieve(font_url, tmp_path)
+    pdfmetrics.registerFont(TTFont(font_name, tmp_path))
+    return font_name
+
+try:
+    CN_FONT = _load_chinese_font()
+    CN_FONT_BOLD = CN_FONT          # NotoSansSC 无单独 Bold TTF，统一用 Regular
+    _FONT_OK = True
+except Exception as _fe:
+    CN_FONT = "Helvetica"
+    CN_FONT_BOLD = "Helvetica-Bold"
+    _FONT_OK = False
 
 # ══════════════════════════════════════════════════════
 # 页面配置
@@ -410,158 +463,177 @@ def make_pdf(sc, lvl_tuple) -> bytes:
     p   = canvas.Canvas(buf, pagesize=A4)
     W, H = A4
 
+    # ── 字体辅助（支持中文） ──────────────────────────────
+    CF  = CN_FONT       # 中文常规
+    CFB = CN_FONT_BOLD  # 中文粗体（同字体，字号加大区分）
+
+    def draw_cn(x, y, txt, font=CF, size=10, color=(0.1,0.1,0.1)):
+        p.setFont(font, size)
+        p.setFillColorRGB(*color)
+        p.drawString(x, y, txt)
+
+    def draw_cn_c(cx, y, txt, font=CF, size=10, color=(1,1,1)):
+        p.setFont(font, size)
+        p.setFillColorRGB(*color)
+        p.drawCentredString(cx, y, txt)
+
+    def draw_cn_r(rx, y, txt, font=CF, size=9, color=(0.5,0.5,0.5)):
+        p.setFont(font, size)
+        p.setFillColorRGB(*color)
+        p.drawRightString(rx, y, txt)
+
+    # ── 页眉 ─────────────────────────────────────────────
     def hdr():
         p.setFillColorRGB(0.086, 0.282, 0.753)
         p.rect(0, H-64, W, 64, fill=1, stroke=0)
-        p.setFillColorRGB(1, 1, 1)
-        p.setFont("Helvetica-Bold", 14)
-        p.drawString(22, H-28, "Zhengzhangxun Marketing Management Consulting Center")
-        p.setFont("Helvetica", 10)
-        p.drawString(22, H-46, "Retail Pharmacy Potential Evaluation Report")
-        p.drawRightString(W-22, H-46, f"Date: {survey_date}")
+        draw_cn(22, H-28, "正掌讯营销管理咨询中心", CFB, 14, (1,1,1))
+        draw_cn(22, H-46, "零售药店潜力评估报告",   CF,  10, (1,1,1))
+        draw_cn_r(W-22, H-46, f"调研日期：{survey_date}", CF, 9, (1,1,1))
 
-    def ftr(n):
-        p.setFillColorRGB(0.5, 0.5, 0.5)
-        p.setFont("Helvetica", 8)
-        p.drawString(22, 16, "(C) 2026 Zhengzhangxun (Xi'an Zhengxun Software)  |  Confidential")
-        p.drawRightString(W-22, 16, f"Page {n}")
+    # ── 页脚 ─────────────────────────────────────────────
+    page_num = [1]
+    def ftr():
+        draw_cn(22, 16, "© 2026 正掌讯（西安正讯软件有限公司）· 保密文件", CF, 8, (0.5,0.5,0.5))
+        draw_cn_r(W-22, 16, f"第 {page_num[0]} 页", CF, 8, (0.5,0.5,0.5))
         p.setStrokeColorRGB(0.086, 0.282, 0.753)
         p.line(22, 26, W-22, 26)
 
+    # ── 章节标题 ─────────────────────────────────────────
     def sec(title, y):
         p.setFillColorRGB(0.086, 0.282, 0.753)
         p.rect(22, y-2, 4, 15, fill=1, stroke=0)
-        p.setFillColorRGB(0.086, 0.282, 0.753)
-        p.setFont("Helvetica-Bold", 11)
-        p.drawString(30, y, title)
+        draw_cn(30, y, title, CFB, 11, (0.086,0.282,0.753))
         return y-22
 
+    # ── 信息行 ───────────────────────────────────────────
     def irow(lbl, val, y, bold=False):
-        p.setFillColorRGB(0.5, 0.5, 0.5)
-        p.setFont("Helvetica", 9)
-        p.drawString(36, y, lbl)
-        p.setFillColorRGB(0.1, 0.1, 0.1)
-        p.setFont("Helvetica-Bold" if bold else "Helvetica", 10)
-        p.drawString(210, y, str(val))
-        return y-15
+        draw_cn(36,  y, lbl,      CF,              9,  (0.5,0.5,0.5))
+        draw_cn(210, y, str(val), CFB if bold else CF, 10, (0.1,0.1,0.1))
+        return y-16
 
+    # ═══════════════════════════════════════════════════
+    # 第一页
+    # ═══════════════════════════════════════════════════
     hdr()
     y = H - 80
 
     # 基本信息
-    y = sec("Basic Information & Surveyor Details", y)
+    y = sec("调研基本信息", y)
     for lbl, val in [
-        ("Pharmacy Name",     pharmacy_name or "N/A"),
-        ("Target Drug",       target_drug or "N/A"),
-        ("City",              city or "N/A"),
-        ("Researcher Name",   researcher or "N/A"),
-        ("Researcher Tel",    researcher_tel or "N/A"),
-        ("Researcher Email",  reporter_email or "N/A"),
-        ("Company / Team",    company or "N/A"),
-        ("Survey Date",       str(survey_date)),
+        ("药店名称",   pharmacy_name  or "N/A"),
+        ("目标药品",   target_drug    or "N/A"),
+        ("所在城市",   city           or "N/A"),
+        ("调研人员",   researcher     or "N/A"),
+        ("联系手机",   researcher_tel or "N/A"),
+        ("调研人邮箱", reporter_email or "N/A"),
+        ("所属企业",   company        or "N/A"),
+        ("调研日期",   str(survey_date)),
     ]:
         y = irow(lbl, val, y)
     y -= 6
 
-    # 总分大框
+    # ── 总分大框 ─────────────────────────────────────────
     p.setFillColorRGB(0.086, 0.282, 0.753)
-    p.roundRect(22, y-78, W-44, 86, 8, fill=1, stroke=0)
-    p.setFillColorRGB(1, 1, 1)
-    p.setFont("Helvetica-Bold", 52)
-    p.drawCentredString(W/2, y-50, f"{sc['total']}")
-    p.setFont("Helvetica-Bold", 13)
-    p.drawCentredString(W/2, y-65, level)
-    p.setFont("Helvetica", 9)
-    p.drawCentredString(W/2, y-78, prio.replace("⭐","*"))
-    y -= 94
+    p.roundRect(22, y-82, W-44, 90, 8, fill=1, stroke=0)
+    draw_cn_c(W/2, y-20, "综合潜力得分", CF,  11, (1,1,1))
+    draw_cn_c(W/2, y-52, f"{sc['total']}", CFB, 48, (1,1,1))
+    draw_cn_c(W/2, y-68, level,           CFB, 13, (1,1,1))
+    draw_cn_c(W/2, y-82, prio.replace("⭐","★"), CF, 9, (1,0.9,0.6))
+    y -= 98
 
-    # 四维格
+    # ── 四维格 ───────────────────────────────────────────
     y -= 6
     bw = (W-44-9)/4
     dims = [
-        (f"S_Demand  {sc['s_demand']}", "Demand 45%",  (0.086,0.282,0.753)),
-        (f"S_Growth  {sc['s_growth']}", "Growth 25%",  (0.0,0.537,0.482)),
-        (f"S_Comp    {sc['s_comp']}",   "Comp 20%",    (0.961,0.49,0.0)),
-        (f"S_Basic   {sc['s_basic']}",  "Basic 10%",   (0.557,0.141,0.667)),
+        (f"需求潜力", f"{sc['s_demand']}", "权重 45%", (0.086,0.282,0.753)),
+        (f"增长潜力", f"{sc['s_growth']}", "权重 25%", (0.0,0.537,0.482)),
+        (f"竞争推荐", f"{sc['s_comp']}",   "权重 20%", (0.961,0.49,0.0)),
+        (f"基础实力", f"{sc['s_basic']}",  "权重 10%", (0.557,0.141,0.667)),
     ]
-    for i, (title, wlbl, col) in enumerate(dims):
+    for i, (dname, dval, dwt, col) in enumerate(dims):
         bx = 22 + i*(bw+3)
         p.setFillColorRGB(*col)
-        p.roundRect(bx, y-46, bw, 52, 6, fill=1, stroke=0)
-        p.setFillColorRGB(1, 1, 1)
-        parts = title.split("  ")
-        p.setFont("Helvetica-Bold", 9)
-        p.drawCentredString(bx+bw/2, y-12, parts[0])
-        p.setFont("Helvetica-Bold", 20)
-        p.drawCentredString(bx+bw/2, y-32, parts[1])
-        p.setFont("Helvetica", 8)
-        p.drawCentredString(bx+bw/2, y-44, wlbl)
-    y -= 60
+        p.roundRect(bx, y-50, bw, 56, 6, fill=1, stroke=0)
+        draw_cn_c(bx+bw/2, y-12, dname, CF,  9,  (1,1,1))
+        draw_cn_c(bx+bw/2, y-34, dval,  CFB, 22, (1,1,1))
+        draw_cn_c(bx+bw/2, y-47, dwt,   CF,  8,  (1,1,1))
+    y -= 64
 
-    # 细项得分表
-    y = sec("Score Breakdown", y-4)
+    # ── 细项得分表 ───────────────────────────────────────
+    y = sec("维度得分明细", y-4)
     tdata = [
-        ["Dimension", "Sub-Indicator", "Score"],
-        ["Demand (45%)", "Traffic Normalized",   str(sc["traffic_n"])],
-        ["",             "Rx Outflow Factor",    f"x{rx_factor}"],
-        ["",             "Final S_Demand",       str(sc["s_demand"])],
-        ["Growth (25%)", "CAGR Score",           str(sc["cagr_s"])],
-        ["",             "Member Growth Score",  str(sc["mem_s"])],
-        ["",             "Final S_Growth",       str(sc["s_growth"])],
-        ["Comp (20%)",   "Display Score",        str(xscore(display_pos))],
-        ["",             "Recommendation (adj)", str(sc["rec_s"])],
-        ["",             "Final S_Competition",  str(sc["s_comp"])],
-        ["Basic (10%)",  "Chain Type",           str(xscore(chain_type))],
-        ["",             "Insurance Level",      str(xscore(insurance_type))],
-        ["",             "Location",             str(xscore(location_type))],
-        ["",             "Final S_Basic",        str(sc["s_basic"])],
-        ["TOTAL SCORE",  "",                     str(sc["total"])],
+        ["维度",         "子指标",         "得分"],
+        ["需求潜力(45%)", "客流归一化",     str(sc["traffic_n"])],
+        ["",             "处方外流系数",    f"×{rx_factor}"],
+        ["",             "S_Demand",        str(sc["s_demand"])],
+        ["增长潜力(25%)", "CAGR评分",       str(sc["cagr_s"])],
+        ["",             "会员增长评分",    str(sc["mem_s"])],
+        ["",             "S_Growth",        str(sc["s_growth"])],
+        ["竞争推荐(20%)", "陈列位置评分",   str(xscore(display_pos))],
+        ["",             "推介意愿(含修正)",str(sc["rec_s"])],
+        ["",             "S_Competition",   str(sc["s_comp"])],
+        ["基础实力(10%)", "连锁类型",       str(xscore(chain_type))],
+        ["",             "医保资质",        str(xscore(insurance_type))],
+        ["",             "地理区位",        str(xscore(location_type))],
+        ["",             "S_Basic",         str(sc["s_basic"])],
+        ["综合总分",      "",               str(sc["total"])],
     ]
-    cw = [(W-44)*0.38, (W-44)*0.40, (W-44)*0.22]
-    rh = 13
+    cw = [(W-44)*0.36, (W-44)*0.42, (W-44)*0.22]
+    rh = 14
     for ri, rrow in enumerate(tdata):
         if ri == 0:              bg = (0.086,0.282,0.753)
         elif ri == len(tdata)-1: bg = (1,0.95,0.82)
         elif ri%2 == 0:          bg = (0.95,0.97,1.0)
         else:                    bg = (1,1,1)
         p.setFillColorRGB(*bg)
-        p.rect(22, y-rh+2, W-44, rh, fill=1, stroke=0)
+        p.rect(22, y-rh+3, W-44, rh, fill=1, stroke=0)
         tx = 22
         for ci, cell in enumerate(rrow):
-            if ri == 0:              p.setFillColorRGB(1,1,1)
-            elif ri == len(tdata)-1: p.setFillColorRGB(0.6,0.2,0.0)
-            else:                    p.setFillColorRGB(0.15,0.15,0.15)
-            is_bold = (ri==0 or ri==len(tdata)-1 or ci==2)
-            p.setFont("Helvetica-Bold" if is_bold else "Helvetica", 8)
-            p.drawString(tx+4, y-rh+4, cell)
+            if ri == 0:
+                fc = (1,1,1)
+            elif ri == len(tdata)-1:
+                fc = (0.6,0.2,0.0)
+            else:
+                fc = (0.15,0.15,0.15)
+            is_bold = (ri == 0 or ri == len(tdata)-1 or ci == 2)
+            draw_cn(tx+4, y-rh+5, cell, CFB if is_bold else CF, 8, fc)
             tx += cw[ci]
         y -= rh
         if y < 80:
-            ftr(1); p.showPage(); hdr(); y = H-80
+            ftr(); page_num[0] += 1
+            p.showPage(); hdr(); y = H-80
 
-    # 策略建议
+    # ── 策略建议 ─────────────────────────────────────────
     y -= 10
-    y = sec("Strategic Action Plan", y)
+    y = sec("精准经营策略建议", y)
     for s in strategies:
-        txt = s[:82]+"..." if len(s) > 82 else s
-        p.setFillColorRGB(0.2, 0.2, 0.2)
-        p.setFont("Helvetica", 9)
-        p.drawString(34, y, f"* {txt}")
-        y -= 13
-        if y < 60:
-            ftr(1); p.showPage(); hdr(); y = H-80
+        # 长字符串自动换行（每行约26个汉字）
+        chunk = 26
+        lines = [s[i:i+chunk] for i in range(0, len(s), chunk)]
+        for li, ln in enumerate(lines):
+            prefix = "● " if li == 0 else "   "
+            draw_cn(34, y, prefix + ln, CF, 9, (0.2,0.2,0.2))
+            y -= 14
+            if y < 60:
+                ftr(); page_num[0] += 1
+                p.showPage(); hdr(); y = H-80
+        y -= 2
 
-    # 备注
+    # ── 现场备注 ─────────────────────────────────────────
     if notes.strip():
         y -= 4
-        y = sec("Field Notes", y)
+        y = sec("现场补充备注", y)
         for ln in notes.split("\n"):
-            p.setFont("Helvetica", 9)
-            p.setFillColorRGB(0.3, 0.3, 0.3)
-            p.drawString(34, y, ln[:90])
-            y -= 13
+            chunk = 36
+            parts = [ln[i:i+chunk] for i in range(0, max(len(ln),1), chunk)]
+            for pt in parts:
+                draw_cn(34, y, pt, CF, 9, (0.3,0.3,0.3))
+                y -= 13
+                if y < 60:
+                    ftr(); page_num[0] += 1
+                    p.showPage(); hdr(); y = H-80
 
-    ftr(1)
+    ftr()
     p.showPage()
     p.save()
     buf.seek(0)
@@ -653,8 +725,7 @@ if submit:
     if not pharmacy_name.strip():  missing.append("目标药店名称")
     if not target_drug.strip():    missing.append("被评估药品名称")
     if missing:
-        missing_str = "、".join(missing)
-        st.error(f"⚠️ 以下必填项尚未填写：{missing_str}")
+        st.error(f"⚠️ 以下必填项尚未填写：{'、'.join(missing)}")
         st.stop()
 
     sc  = calc()
