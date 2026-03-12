@@ -2,8 +2,8 @@ import streamlit as st
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-import io, smtplib, ssl, os, tempfile
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+import io, smtplib, ssl, os
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -11,55 +11,12 @@ from email.mime.base import MIMEBase
 from email import encoders
 
 # ══════════════════════════════════════════════════════
-# 中文字体加载（兼容本地 & Streamlit Cloud）
+# 中文字体（ReportLab 内置 CID 字体，无需任何字体文件）
+# STSong-Light 原生支持简体中文，本地与 Streamlit Cloud 均可直接使用。
 # ══════════════════════════════════════════════════════
-@st.cache_resource(show_spinner="正在加载中文字体，请稍候…")
-def _load_chinese_font() -> str:
-    """
-    返回已注册到 ReportLab 的中文字体名称。
-    优先查找系统字体，找不到则从 Google Fonts CDN 下载 NotoSansSC。
-    """
-    font_name = "NotoSansSC"
-    # 常见系统路径（Linux / macOS / Windows）
-    candidates = [
-        # Linux: fonts-noto-cjk 安装路径
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
-        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
-        # macOS
-        "/Library/Fonts/NotoSansCJK-Regular.ttc",
-        # Windows
-        "C:/Windows/Fonts/NotoSansSC-Regular.ttf",
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            try:
-                pdfmetrics.registerFont(TTFont(font_name, path))
-                return font_name
-            except Exception:
-                continue
-
-    # 未找到系统字体，下载 NotoSansSC-Regular.ttf（约 8 MB）
-    import urllib.request
-    font_url = (
-        "https://github.com/googlefonts/noto-cjk/raw/main/Sans/SubsetOTF/"
-        "SC/NotoSansSC-Regular.otf"
-    )
-    tmp_dir  = tempfile.gettempdir()
-    tmp_path = os.path.join(tmp_dir, "NotoSansSC-Regular.otf")
-    if not os.path.exists(tmp_path):
-        urllib.request.urlretrieve(font_url, tmp_path)
-    pdfmetrics.registerFont(TTFont(font_name, tmp_path))
-    return font_name
-
-try:
-    CN_FONT = _load_chinese_font()
-    CN_FONT_BOLD = CN_FONT          # NotoSansSC 无单独 Bold TTF，统一用 Regular
-    _FONT_OK = True
-except Exception as _fe:
-    CN_FONT = "Helvetica"
-    CN_FONT_BOLD = "Helvetica-Bold"
-    _FONT_OK = False
+pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+CN_FONT      = "STSong-Light"
+CN_FONT_BOLD = "STSong-Light"
 
 # ══════════════════════════════════════════════════════
 # 页面配置
@@ -532,24 +489,24 @@ def make_pdf(sc, lvl_tuple) -> bytes:
         y = irow(lbl, val, y)
     y -= 6
 
-    # ── 综合得分 + 四维格：横向双栏，高度统一 ───────────────
-    BOX_H = 80          # 整体区块高度
-    LEFT_W = 150        # 左侧得分栏宽度
-    GAP    = 6          # 左右间距
+    # ── 综合得分 + 四维格：横向双栏，协调布局 ──────────────
+    BOX_H  = 80
+    LEFT_W = 150
+    GAP    = 6
 
     # 左侧：综合得分卡
     p.setFillColorRGB(0.086, 0.282, 0.753)
     p.roundRect(22, y - BOX_H, LEFT_W, BOX_H, 7, fill=1, stroke=0)
-    draw_cn_c(22 + LEFT_W/2, y - 14, "综合潜力得分", CF, 9, (1, 1, 1))
+    draw_cn_c(22 + LEFT_W/2, y - 14, "综合潜力得分", CF, 9,  (1, 1, 1))
     draw_cn_c(22 + LEFT_W/2, y - 38, str(sc['total']), CFB, 30, (1, 1, 1))
-    draw_cn_c(22 + LEFT_W/2, y - 54, level, CF, 9, (1, 1, 0.75))
+    draw_cn_c(22 + LEFT_W/2, y - 54, level,  CF, 9,  (1, 1, 0.75))
     draw_cn_c(22 + LEFT_W/2, y - 68, prio.replace("⭐","★")[:10], CF, 7, (1, 0.9, 0.6))
 
     # 右侧：四维格（2×2 网格）
-    right_x  = 22 + LEFT_W + GAP
-    right_w  = W - 44 - LEFT_W - GAP
-    cell_w   = (right_w - 4) / 2   # 2列，间距4
-    cell_h   = (BOX_H - 4) / 2     # 2行，间距4
+    right_x = 22 + LEFT_W + GAP
+    right_w = W - 44 - LEFT_W - GAP
+    cell_w  = (right_w - 4) / 2
+    cell_h  = (BOX_H - 4) / 2
     dims = [
         ("需求潜力", str(sc['s_demand']), "权重 45%", (0.086, 0.282, 0.753)),
         ("增长潜力", str(sc['s_growth']), "权重 25%", (0.0,   0.537, 0.482)),
@@ -557,18 +514,18 @@ def make_pdf(sc, lvl_tuple) -> bytes:
         ("基础实力", str(sc['s_basic']),  "权重 10%", (0.557, 0.141, 0.667)),
     ]
     positions = [
-        (right_x,              y - cell_h),          # 左上
-        (right_x + cell_w + 4, y - cell_h),          # 右上
-        (right_x,              y - BOX_H),            # 左下
-        (right_x + cell_w + 4, y - BOX_H),            # 右下
+        (right_x,              y - cell_h),
+        (right_x + cell_w + 4, y - cell_h),
+        (right_x,              y - BOX_H),
+        (right_x + cell_w + 4, y - BOX_H),
     ]
     for (bx, by), (dname, dval, dwt, col) in zip(positions, dims):
         p.setFillColorRGB(*col)
         p.roundRect(bx, by, cell_w, cell_h - 2, 5, fill=1, stroke=0)
         cx = bx + cell_w / 2
-        draw_cn_c(cx, by + cell_h - 14, dname, CF,  8, (1,1,1))
-        draw_cn_c(cx, by + cell_h - 30, dval,  CFB, 16,(1,1,1))
-        draw_cn_c(cx, by + 4,           dwt,   CF,  7, (1,1,1))
+        draw_cn_c(cx, by + cell_h - 14, dname, CF,  8,  (1, 1, 1))
+        draw_cn_c(cx, by + cell_h - 30, dval,  CFB, 16, (1, 1, 1))
+        draw_cn_c(cx, by + 4,           dwt,   CF,  7,  (1, 1, 1))
 
     y -= BOX_H + 10
 
