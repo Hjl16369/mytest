@@ -2,8 +2,8 @@ import streamlit as st
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-import io, smtplib, ssl, os, tempfile
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+import io, smtplib, ssl, os
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -11,55 +11,13 @@ from email.mime.base import MIMEBase
 from email import encoders
 
 # ══════════════════════════════════════════════════════
-# 中文字体加载（兼容本地 & Streamlit Cloud）
+# 中文字体（ReportLab 内置 CID 字体，无需任何字体文件）
+# STSong-Light 是 ReportLab 原生支持的简体中文字体，
+# 本地与 Streamlit Cloud 均可直接使用。
 # ══════════════════════════════════════════════════════
-@st.cache_resource(show_spinner="正在加载中文字体，请稍候…")
-def _load_chinese_font() -> str:
-    """
-    返回已注册到 ReportLab 的中文字体名称。
-    优先查找系统字体，找不到则从 Google Fonts CDN 下载 NotoSansSC。
-    """
-    font_name = "NotoSansSC"
-    # 常见系统路径（Linux / macOS / Windows）
-    candidates = [
-        # Linux: fonts-noto-cjk 安装路径
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
-        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
-        # macOS
-        "/Library/Fonts/NotoSansCJK-Regular.ttc",
-        # Windows
-        "C:/Windows/Fonts/NotoSansSC-Regular.ttf",
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            try:
-                pdfmetrics.registerFont(TTFont(font_name, path))
-                return font_name
-            except Exception:
-                continue
-
-    # 未找到系统字体，下载 NotoSansSC-Regular.ttf（约 8 MB）
-    import urllib.request
-    font_url = (
-        "https://github.com/googlefonts/noto-cjk/raw/main/Sans/SubsetOTF/"
-        "SC/NotoSansSC-Regular.otf"
-    )
-    tmp_dir  = tempfile.gettempdir()
-    tmp_path = os.path.join(tmp_dir, "NotoSansSC-Regular.otf")
-    if not os.path.exists(tmp_path):
-        urllib.request.urlretrieve(font_url, tmp_path)
-    pdfmetrics.registerFont(TTFont(font_name, tmp_path))
-    return font_name
-
-try:
-    CN_FONT = _load_chinese_font()
-    CN_FONT_BOLD = CN_FONT          # NotoSansSC 无单独 Bold TTF，统一用 Regular
-    _FONT_OK = True
-except Exception as _fe:
-    CN_FONT = "Helvetica"
-    CN_FONT_BOLD = "Helvetica-Bold"
-    _FONT_OK = False
+pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+CN_FONT      = "STSong-Light"
+CN_FONT_BOLD = "STSong-Light"   # CID 无粗体变体，用字号/色彩区分层级
 
 # ══════════════════════════════════════════════════════
 # 页面配置
