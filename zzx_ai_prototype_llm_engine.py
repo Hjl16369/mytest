@@ -14,7 +14,7 @@ from typing import Dict, Any
 # ══════════════════════════════════════════════════════
 # 配置
 # ══════════════════════════════════════════════════════
-DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
+DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "sk-c4bbfc49d1a84880ae3241dff77a9e8f")
 DASHSCOPE_URL     = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 MODEL             = "qwen-plus"
 
